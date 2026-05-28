@@ -8,7 +8,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
     Frame,
 };
-use tui_textarea::TextArea;
+use ratatui_textarea::TextArea;
 
 use crate::engine::{
     types::{EngineError, EvalMode, EvalRequest, EvalResponse, Flags, Match},

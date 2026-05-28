@@ -14,15 +14,15 @@ use clap_complete::{generate, Shell};
 )]
 pub struct Cli {
     /// Path to config file
-    #[arg(long, value_name = "FILE", env = "RGX_CONFIG")]
+    #[arg(long, value_name = "FILE")]
     pub config: Option<PathBuf>,
 
     /// Path to history database
-    #[arg(long, value_name = "FILE", env = "RGX_DB")]
+    #[arg(long, value_name = "FILE")]
     pub db: Option<PathBuf>,
 
     /// Enable Nerd Font icons in the UI
-    #[arg(long, env = "RGX_NERD_FONTS")]
+    #[arg(long)]
     pub nerd_fonts: bool,
 
     /// Skip the runtime probe splash screen
