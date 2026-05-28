@@ -1,3 +1,20 @@
+/* rgx: command line regexp tester
+ * Copyright 2026 Mario Finelli
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 use std::io;
 use std::time::Duration;
 
@@ -6,13 +23,16 @@ use clap::Parser;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{
+        EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
+        enable_raw_mode,
+    },
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend};
 
 use rgx::cli::Cli;
 use rgx::engine::RustEngine;
-use rgx::tui::{handle_key, render, App};
+use rgx::tui::{App, handle_key, render};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -22,9 +42,9 @@ fn main() -> Result<()> {
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
 
-    // Panic safety net: restores the terminal even if run() panics.
-    // Drop::drop() can't return errors so they are silently swallowed here —
-    // the explicit match below handles error propagation on the normal path.
+    // Panic safety net: restores the terminal even if run() panics
+    // Drop::drop() can't return errors so they are silently swallowed here
+    // (the explicit match below handles error propagation on the normal path)
     let _guard = scopeguard::defer_on_unwind! {
         let _ = disable_raw_mode();
         let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
@@ -35,7 +55,7 @@ fn main() -> Result<()> {
 
     let result = run(&mut terminal);
 
-    // Normal path cleanup — errors are captured and returned.
+    // Normal path cleanup (errors are captured and returned)
     let cleanup: Result<()> = (|| {
         disable_raw_mode()?;
         execute!(
@@ -49,7 +69,8 @@ fn main() -> Result<()> {
 
     match (result, cleanup) {
         (Err(run_err), Err(cleanup_err)) => {
-            Err(run_err.context(format!("cleanup also failed: {}", cleanup_err)))
+            Err(run_err
+                .context(format!("cleanup also failed: {}", cleanup_err)))
         }
         (Err(run_err), Ok(_)) => Err(run_err),
         (Ok(_), Err(cleanup_err)) => Err(cleanup_err),
