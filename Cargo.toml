@@ -2,5 +2,21 @@
 name = "rgx"
 version = "0.1.0"
 edition = "2024"
+description = "A terminal UI regex tester with multi-engine support"
+license = "GPL-3.0-or-later"
+
+[[bin]]
+name = "rgx"
+path = "src/main.rs"
 
 [dependencies]
+ratatui = "0.28"
+crossterm = { version = "0.27", features = ["event-stream"] }
+tui-textarea = { version = "0.6", features = ["crossterm"] }
+regex = "1"
+fancy-regex = "0.13"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+
+[dev-dependencies]
