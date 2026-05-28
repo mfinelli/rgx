@@ -15,7 +15,8 @@ use engine::RustEngine;
 use tui::{handle_key, render, App};
 
 fn main() -> Result<()> {
-    let _cli = Cli::parse();
+    let cli = Cli::parse();
+    Cli::handle_subcommands(&cli);
 
     // Set up terminal
     enable_raw_mode()?;
