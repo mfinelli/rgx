@@ -32,8 +32,24 @@ use crossterm::{
 use ratatui::{Terminal, backend::CrosstermBackend};
 
 use rgx::cli::{Cli, Command};
-use rgx::engine::RustEngine;
+use rgx::engine::native::RustEngine;
 use rgx::tui::{App, handle_key, render};
+
+/// Restores the terminal to its original state when dropped.
+///
+/// This runs on all scope exits including panics, ensuring the terminal is
+/// never left in raw mode. Errors are silently swallowed since Drop cannot
+/// return a Result — the explicit cleanup in main() handles error propagation
+/// on the normal path.
+struct TerminalGuard;
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ =
+            execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+    }
+}
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -47,18 +63,13 @@ fn main() -> Result<()> {
     }
 
     enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
 
-    // Panic safety net: restores the terminal even if run() panics
-    // Drop::drop() can't return errors so they are silently swallowed here
-    // (the explicit match below handles error propagation on the normal path)
-    let _guard = scopeguard::defer_on_unwind! {
-        let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
-    };
+    // Installed immediately after raw mode is enabled so it fires even if
+    // the code below panics. Normal-path cleanup is handled explicitly below.
+    let _guard = TerminalGuard;
 
-    let backend = CrosstermBackend::new(stdout);
+    let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
     let result = run(&mut terminal);

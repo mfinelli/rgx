@@ -1,5 +1,5 @@
-use regex::RegexBuilder;
 use super::types::*;
+use regex::RegexBuilder;
 
 pub struct RustEngine {
     /// When true, uses fancy-regex which adds lookahead/lookbehind/backreferences
@@ -12,7 +12,10 @@ impl RustEngine {
         Self { use_fancy: false }
     }
 
-    pub fn evaluate(&self, req: &EvalRequest) -> Result<EvalResponse, EngineError> {
+    pub fn evaluate(
+        &self,
+        req: &EvalRequest,
+    ) -> Result<EvalResponse, EngineError> {
         if req.pattern.is_empty() {
             return Ok(EvalResponse::default());
         }
@@ -24,7 +27,10 @@ impl RustEngine {
         }
     }
 
-    fn eval_regex(&self, req: &EvalRequest) -> Result<EvalResponse, EngineError> {
+    fn eval_regex(
+        &self,
+        req: &EvalRequest,
+    ) -> Result<EvalResponse, EngineError> {
         let re = RegexBuilder::new(&req.pattern)
             .case_insensitive(req.flags.case_insensitive)
             .multi_line(req.flags.multiline)
@@ -48,33 +54,50 @@ impl RustEngine {
                 .collect()
         };
 
-        let replaced = if req.mode == EvalMode::Replace && !req.replacement.is_empty() {
-            let native = normalized_to_rust_replacement(&req.replacement);
-            Some(if req.flags.global {
-                re.replace_all(&req.input, native.as_str()).to_string()
+        let replaced =
+            if req.mode == EvalMode::Replace && !req.replacement.is_empty() {
+                let native = normalized_to_rust_replacement(&req.replacement);
+                Some(if req.flags.global {
+                    re.replace_all(&req.input, native.as_str()).to_string()
+                } else {
+                    re.replace(&req.input, native.as_str()).to_string()
+                })
             } else {
-                re.replace(&req.input, native.as_str()).to_string()
-            })
-        } else {
-            None
-        };
+                None
+            };
 
         Ok(EvalResponse { matches, replaced })
     }
 
-    fn eval_fancy(&self, req: &EvalRequest) -> Result<EvalResponse, EngineError> {
-        use fancy_regex::RegexBuilder as FancyBuilder;
+    fn eval_fancy(
+        &self,
+        req: &EvalRequest,
+    ) -> Result<EvalResponse, EngineError> {
+        // fancy-regex's RegexBuilder does not expose individual flag methods —
+        // flags are applied by prepending inline (?flags) syntax to the pattern.
+        let mut inline_flags = String::new();
+        if req.flags.case_insensitive {
+            inline_flags.push('i');
+        }
+        if req.flags.multiline {
+            inline_flags.push('m');
+        }
+        if req.flags.dotall {
+            inline_flags.push('s');
+        }
 
-        let mut builder = FancyBuilder::new(&req.pattern);
-        if req.flags.case_insensitive { builder = builder.case_insensitive(true); }
-        if req.flags.multiline { builder = builder.multi_line(true); }
-        if req.flags.dotall { builder = builder.dot_matches_new_line(true); }
+        let pattern = if inline_flags.is_empty() {
+            req.pattern.clone()
+        } else {
+            format!("(?{}){}", inline_flags, req.pattern)
+        };
 
-        let re = builder.build().map_err(|e| EngineError {
-            kind: ErrorKind::Syntax,
-            message: e.to_string(),
-            position: None,
-        })?;
+        let re =
+            fancy_regex::Regex::new(&pattern).map_err(|e| EngineError {
+                kind: ErrorKind::Syntax,
+                message: e.to_string(),
+                position: None,
+            })?;
 
         let mut matches = Vec::new();
 
@@ -85,27 +108,37 @@ impl RustEngine {
                     Ok(Some(cap)) => {
                         let m = cap.get(0).unwrap();
                         // Advance past zero-width matches to avoid infinite loop
-                        let next = if m.start() == m.end() { pos + 1 } else { m.end() };
+                        let next = if m.start() == m.end() {
+                            pos + 1
+                        } else {
+                            m.end()
+                        };
                         matches.push(fancy_captures_to_match(&cap, &re));
                         pos = next;
                     }
                     Ok(None) => break,
-                    Err(e) => return Err(EngineError {
-                        kind: ErrorKind::RuntimeError,
-                        message: e.to_string(),
-                        position: None,
-                    }),
+                    Err(e) => {
+                        return Err(EngineError {
+                            kind: ErrorKind::RuntimeError,
+                            message: e.to_string(),
+                            position: None,
+                        });
+                    }
                 }
             }
         } else {
             match re.captures(&req.input) {
-                Ok(Some(cap)) => matches.push(fancy_captures_to_match(&cap, &re)),
+                Ok(Some(cap)) => {
+                    matches.push(fancy_captures_to_match(&cap, &re))
+                }
                 Ok(None) => {}
-                Err(e) => return Err(EngineError {
-                    kind: ErrorKind::RuntimeError,
-                    message: e.to_string(),
-                    position: None,
-                }),
+                Err(e) => {
+                    return Err(EngineError {
+                        kind: ErrorKind::RuntimeError,
+                        message: e.to_string(),
+                        position: None,
+                    });
+                }
             }
         }
 
@@ -149,7 +182,10 @@ fn captures_to_match(cap: &regex::Captures, re: &regex::Regex) -> Match {
     }
 }
 
-fn fancy_captures_to_match(cap: &fancy_regex::Captures, re: &fancy_regex::Regex) -> Match {
+fn fancy_captures_to_match(
+    cap: &fancy_regex::Captures,
+    re: &fancy_regex::Regex,
+) -> Match {
     let full = cap.get(0).unwrap();
     let names: Vec<Option<&str>> = re.capture_names().collect();
 

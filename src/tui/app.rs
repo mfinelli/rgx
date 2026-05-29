@@ -1,18 +1,18 @@
 use std::time::{Duration, Instant};
 
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
-    Frame,
 };
 use ratatui_textarea::TextArea;
 
 use crate::engine::{
+    native::RustEngine,
     types::{EngineError, EvalMode, EvalRequest, EvalResponse, Flags, Match},
-    RustEngine,
 };
 
 // ─── Mode & Focus ────────────────────────────────────────────────────────────
@@ -68,9 +68,7 @@ impl<'a> App<'a> {
 
         let mut input = TextArea::default();
         input.set_block(
-            Block::default()
-                .title(" Test Input ")
-                .borders(Borders::ALL),
+            Block::default().title(" Test Input ").borders(Borders::ALL),
         );
         input.set_cursor_line_style(Style::default());
 
@@ -136,13 +134,21 @@ impl<'a> App<'a> {
             Block::default()
                 .title(" Pattern ")
                 .borders(Borders::ALL)
-                .border_style(if self.focus == Focus::Pattern { active } else { inactive }),
+                .border_style(if self.focus == Focus::Pattern {
+                    active
+                } else {
+                    inactive
+                }),
         );
         self.input.set_block(
             Block::default()
                 .title(" Test Input ")
                 .borders(Borders::ALL)
-                .border_style(if self.focus == Focus::Input { active } else { inactive }),
+                .border_style(if self.focus == Focus::Input {
+                    active
+                } else {
+                    inactive
+                }),
         );
     }
 
@@ -182,11 +188,21 @@ impl<'a> App<'a> {
         }
 
         let mut flags = String::new();
-        if self.flags.case_insensitive { flags.push('i'); }
-        if self.flags.multiline { flags.push('m'); }
-        if self.flags.dotall { flags.push('s'); }
+        if self.flags.case_insensitive {
+            flags.push('i');
+        }
+        if self.flags.multiline {
+            flags.push('m');
+        }
+        if self.flags.dotall {
+            flags.push('s');
+        }
 
-        let engine_note = if self.use_fancy { "fancy-regex" } else { "regex" };
+        let engine_note = if self.use_fancy {
+            "fancy-regex"
+        } else {
+            "regex"
+        };
 
         if flags.is_empty() {
             format!("Rust ({}) · Regex::new(r\"{}\")", engine_note, pattern)
@@ -210,8 +226,14 @@ pub fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
     // (Session-level undo comes in a later phase.)
     if key.modifiers == KM::CONTROL && key.code == Char('z') {
         match app.focus {
-            Focus::Pattern => { app.pattern.undo(); app.mark_dirty(); }
-            Focus::Input => { app.input.undo(); app.mark_dirty(); }
+            Focus::Pattern => {
+                app.pattern.undo();
+                app.mark_dirty();
+            }
+            Focus::Input => {
+                app.input.undo();
+                app.mark_dirty();
+            }
             Focus::Flags => {}
         }
         return false;
@@ -298,10 +320,14 @@ fn handle_nav(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
 
         // Arrow left/right — move flag cursor when focused on flags
         (Left, KM::NONE) if app.focus == Focus::Flags => {
-            if app.flag_cursor > 0 { app.flag_cursor -= 1; }
+            if app.flag_cursor > 0 {
+                app.flag_cursor -= 1;
+            }
         }
         (Right, KM::NONE) if app.focus == Focus::Flags => {
-            if app.flag_cursor < 3 { app.flag_cursor += 1; }
+            if app.flag_cursor < 3 {
+                app.flag_cursor += 1;
+            }
         }
 
         // Space — toggle flag when focused on flags
@@ -317,8 +343,14 @@ fn handle_nav(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
                 // Forward the character if it was a printable key
                 if let Char(_) = key.code {
                     match app.focus {
-                        Focus::Pattern => { app.pattern.input(key); app.mark_dirty(); }
-                        Focus::Input => { app.input.input(key); app.mark_dirty(); }
+                        Focus::Pattern => {
+                            app.pattern.input(key);
+                            app.mark_dirty();
+                        }
+                        Focus::Input => {
+                            app.input.input(key);
+                            app.mark_dirty();
+                        }
                         Focus::Flags => {}
                     }
                 }
@@ -378,7 +410,12 @@ fn render_engine_bar(app: &App, frame: &mut Frame, area: Rect) {
         " [ Rust · regex ] "
     };
     let bar = Paragraph::new(Line::from(vec![
-        Span::styled(engine_name, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            engine_name,
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(
             " (press f to toggle fancy-regex, ? for help)",
             Style::default().fg(Color::DarkGray),
@@ -411,7 +448,9 @@ fn render_flags(app: &App, frame: &mut Frame, area: Rect) {
             let is_cursor = focused && i == cursor;
 
             let style = if is_cursor {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
             } else if *on {
                 Style::default().fg(Color::Green)
             } else {
@@ -454,9 +493,12 @@ fn render_results(app: &App, frame: &mut Frame, area: Rect) {
         }
         Some(Err(e)) => {
             let msg = format!("error: {}", e);
-            let para = Paragraph::new(Span::styled(msg, Style::default().fg(Color::Red)))
-                .block(block)
-                .wrap(Wrap { trim: false });
+            let para = Paragraph::new(Span::styled(
+                msg,
+                Style::default().fg(Color::Red),
+            ))
+            .block(block)
+            .wrap(Wrap { trim: false });
             frame.render_widget(para, area);
         }
         Some(Ok(resp)) => {
@@ -501,7 +543,12 @@ fn render_match_results(
 
 /// Renders the input text with match spans highlighted.
 /// Byte spans from the engine are mapped back to per-line character ranges.
-fn render_highlighted_input(input: &str, matches: &[Match], frame: &mut Frame, area: Rect) {
+fn render_highlighted_input(
+    input: &str,
+    matches: &[Match],
+    frame: &mut Frame,
+    area: Rect,
+) {
     let match_style = Style::default()
         .fg(Color::Black)
         .bg(Color::Yellow)
@@ -514,9 +561,10 @@ fn render_highlighted_input(input: &str, matches: &[Match], frame: &mut Frame, a
         .iter()
         .map(|m| (m.span.0, m.span.1, match_style))
         .chain(matches.iter().flat_map(|m| {
-            m.groups.iter().filter(|g| g.matched).filter_map(|g| {
-                g.span.map(|(s, e)| (s, e, group_style))
-            })
+            m.groups
+                .iter()
+                .filter(|g| g.matched)
+                .filter_map(|g| g.span.map(|(s, e)| (s, e, group_style)))
         }))
         .collect();
     highlights.sort_by_key(|&(s, _, _)| s);
@@ -533,7 +581,9 @@ fn render_highlighted_input(input: &str, matches: &[Match], frame: &mut Frame, a
         for &(hs, he, style) in &highlights {
             let hs = hs.max(line_start).min(line_end);
             let he = he.max(line_start).min(line_end);
-            if hs >= he { continue; }
+            if hs >= he {
+                continue;
+            }
             if hs > cursor {
                 spans.push(Span::raw(input[cursor..hs].to_string()));
             }
@@ -552,20 +602,27 @@ fn render_highlighted_input(input: &str, matches: &[Match], frame: &mut Frame, a
     }
 
     let para = Paragraph::new(lines)
-        .block(Block::default().title(" Input preview ").borders(Borders::TOP))
+        .block(
+            Block::default()
+                .title(" Input preview ")
+                .borders(Borders::TOP),
+        )
         .wrap(Wrap { trim: false });
     frame.render_widget(para, area);
 }
 
 /// Renders the per-match breakdown list.
 
-
 fn render_match_list(resp: &EvalResponse, frame: &mut Frame, area: Rect) {
     let count = resp.matches.len();
-    let header_style = Style::default().fg(Color::Green).add_modifier(Modifier::BOLD);
+    let header_style = Style::default()
+        .fg(Color::Green)
+        .add_modifier(Modifier::BOLD);
     let dim = Style::default().fg(Color::DarkGray);
     let group_style = Style::default().fg(Color::Cyan);
-    let unmatched_style = Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC);
+    let unmatched_style = Style::default()
+        .fg(Color::DarkGray)
+        .add_modifier(Modifier::ITALIC);
 
     let mut items: Vec<ListItem> = Vec::new();
 
@@ -578,11 +635,11 @@ fn render_match_list(resp: &EvalResponse, frame: &mut Frame, area: Rect) {
     for (i, m) in resp.matches.iter().enumerate() {
         // Match line
         let match_line = Line::from(vec![
-            Span::styled(format!("  Match {} ", i + 1), Style::default().fg(Color::Yellow)),
             Span::styled(
-                format!("[{}..{}]", m.span.0, m.span.1),
-                dim,
+                format!("  Match {} ", i + 1),
+                Style::default().fg(Color::Yellow),
             ),
+            Span::styled(format!("[{}..{}]", m.span.0, m.span.1), dim),
             Span::raw("  "),
             Span::styled(
                 format!("\"{}\"", truncate(&m.full_match, 40)),
@@ -598,13 +655,19 @@ fn render_match_list(resp: &EvalResponse, frame: &mut Frame, area: Rect) {
                 None => format!("    group {} ", g.index),
             };
             if g.matched {
-                let span_str = g.span.map(|(s, e)| format!("[{}..{}]", s, e)).unwrap_or_default();
+                let span_str = g
+                    .span
+                    .map(|(s, e)| format!("[{}..{}]", s, e))
+                    .unwrap_or_default();
                 let val = g.value.as_deref().unwrap_or("");
                 items.push(ListItem::new(Line::from(vec![
                     Span::styled(label, group_style),
                     Span::styled(span_str, dim),
                     Span::raw("  "),
-                    Span::styled(format!("\"{}\"", truncate(val, 30)), Style::default().fg(Color::White)),
+                    Span::styled(
+                        format!("\"{}\"", truncate(val, 30)),
+                        Style::default().fg(Color::White),
+                    ),
                 ])));
             } else {
                 items.push(ListItem::new(Line::from(vec![
@@ -623,7 +686,11 @@ fn render_match_list(resp: &EvalResponse, frame: &mut Frame, area: Rect) {
 fn render_status(app: &App, frame: &mut Frame, area: Rect) {
     let invocation = app.status_invocation();
     let match_count = match &app.eval_result {
-        Some(Ok(r)) => format!("{} match{}", r.matches.len(), if r.matches.len() == 1 { "" } else { "es" }),
+        Some(Ok(r)) => format!(
+            "{} match{}",
+            r.matches.len(),
+            if r.matches.len() == 1 { "" } else { "es" }
+        ),
         Some(Err(_)) => "error".to_string(),
         None => String::new(),
     };
@@ -635,7 +702,9 @@ fn render_status(app: &App, frame: &mut Frame, area: Rect) {
     );
     let right = Span::styled(
         format!(" {} ", match_count),
-        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD),
     );
 
     let available = area.width as usize;
@@ -643,11 +712,7 @@ fn render_status(app: &App, frame: &mut Frame, area: Rect) {
     let left_str = format!(" {} ", invocation);
     let padding = available.saturating_sub(left_str.len() + right_len);
 
-    let line = Line::from(vec![
-        left,
-        Span::raw(" ".repeat(padding)),
-        right,
-    ]);
+    let line = Line::from(vec![left, Span::raw(" ".repeat(padding)), right]);
 
     let para = Paragraph::new(line)
         .style(Style::default().bg(Color::DarkGray).fg(Color::White));
@@ -656,8 +721,18 @@ fn render_status(app: &App, frame: &mut Frame, area: Rect) {
 
 fn render_hint(app: &App, frame: &mut Frame, area: Rect) {
     let mode_indicator = match app.mode {
-        AppMode::Insert => Span::styled(" INSERT ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        AppMode::Nav => Span::styled(" NAV ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        AppMode::Insert => Span::styled(
+            " INSERT ",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        AppMode::Nav => Span::styled(
+            " NAV ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
     };
 
     let hints = Span::styled(
@@ -681,14 +756,23 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
     frame.render_widget(Clear, popup_area);
 
     let help_text = vec![
-        Line::from(Span::styled(" Keybinds", Style::default().add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled(
+            " Keybinds",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
         Line::raw(""),
-        Line::from(Span::styled(" Always available:", Style::default().fg(Color::Yellow))),
+        Line::from(Span::styled(
+            " Always available:",
+            Style::default().fg(Color::Yellow),
+        )),
         Line::raw("   ctrl+p      Jump to pattern field"),
         Line::raw("   ctrl+t      Jump to test input field"),
         Line::raw("   ctrl+z      Undo (within field)"),
         Line::raw(""),
-        Line::from(Span::styled(" Nav layer (after Escape):", Style::default().fg(Color::Cyan))),
+        Line::from(Span::styled(
+            " Nav layer (after Escape):",
+            Style::default().fg(Color::Cyan),
+        )),
         Line::raw("   q           Quit"),
         Line::raw("   ?           Toggle this help"),
         Line::raw("   Tab         Cycle focus"),
@@ -696,11 +780,17 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         Line::raw("   f           Toggle fancy-regex mode"),
         Line::raw("   Enter       Re-enter insert mode"),
         Line::raw(""),
-        Line::from(Span::styled(" When Flags row is focused:", Style::default().fg(Color::Green))),
+        Line::from(Span::styled(
+            " When Flags row is focused:",
+            Style::default().fg(Color::Green),
+        )),
         Line::raw("   ←  →        Move between flags"),
         Line::raw("   Space       Toggle flag"),
         Line::raw(""),
-        Line::from(Span::styled(" Press ? to close", Style::default().fg(Color::DarkGray))),
+        Line::from(Span::styled(
+            " Press ? to close",
+            Style::default().fg(Color::DarkGray),
+        )),
     ];
 
     let block = Block::default()
