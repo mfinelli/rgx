@@ -1,7 +1,24 @@
+/* rgx: command line regexp tester
+ * Copyright 2026 Mario Finelli
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 use std::path::PathBuf;
 
-use clap::{CommandFactory, Parser, Subcommand};
-use clap_complete::{generate, Shell};
+use clap::{Parser, Subcommand};
+use clap_complete::Shell;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -17,18 +34,6 @@ pub struct Cli {
     #[arg(long, value_name = "FILE")]
     pub config: Option<PathBuf>,
 
-    /// Path to history database
-    #[arg(long, value_name = "FILE")]
-    pub db: Option<PathBuf>,
-
-    /// Enable Nerd Font icons in the UI
-    #[arg(long)]
-    pub nerd_fonts: bool,
-
-    /// Skip the runtime probe splash screen
-    #[arg(long)]
-    pub no_splash: bool,
-
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -38,22 +43,10 @@ pub enum Command {
     /// Generate shell completions and print to stdout
     ///
     /// Example: rgx completions bash >> ~/.bash_completion
+    #[command(hide = true)]
     Completions {
         /// The shell to generate completions for
         #[arg(value_enum)]
         shell: Shell,
     },
-}
-
-impl Cli {
-    /// If a subcommand was given, handle it and exit.
-    /// Returns the Cli if normal TUI startup should proceed.
-    pub fn handle_subcommands(cli: &Cli) {
-        if let Some(Command::Completions { shell }) = &cli.command {
-            let mut cmd = Cli::command();
-            let name = cmd.get_name().to_string();
-            generate(*shell, &mut cmd, name, &mut std::io::stdout());
-            std::process::exit(0);
-        }
-    }
 }

@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use clap::Parser;
+use clap_complete::generate;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     execute,
@@ -30,13 +31,20 @@ use crossterm::{
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 
-use rgx::cli::Cli;
+use rgx::cli::{Cli, Command};
 use rgx::engine::RustEngine;
 use rgx::tui::{App, handle_key, render};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    Cli::handle_subcommands(&cli);
+
+    // Handle subcommands before any TUI setup
+    if let Some(Command::Completions { shell }) = cli.command {
+        let mut cmd = <Cli as clap::CommandFactory>::command();
+        let name = cmd.get_name().to_string();
+        generate(shell, &mut cmd, name, &mut io::stdout());
+        return Ok(());
+    }
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
