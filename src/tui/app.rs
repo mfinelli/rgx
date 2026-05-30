@@ -96,6 +96,15 @@ pub enum ResultsSubFocus {
     Matches,
 }
 
+/// Where the cursor sits within the flag row.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FlagRowFocus {
+    /// The variant selector at the left of the row.
+    Variant,
+    /// One of the flag toggles (0-indexed).
+    Flag(usize),
+}
+
 pub struct App<'a> {
     pub mode: AppMode,
     pub focus: Focus,
@@ -104,8 +113,8 @@ pub struct App<'a> {
     pub input: TextArea<'a>,
 
     pub flags: Flags,
-    /// Index of the currently highlighted flag in the flag row (for nav).
-    pub flag_cursor: usize,
+    /// Which item in the flag row is currently highlighted.
+    pub flag_row_focus: FlagRowFocus,
 
     pub use_fancy: bool,
 
@@ -152,7 +161,7 @@ impl<'a> App<'a> {
                 global: true,
                 ..Default::default()
             },
-            flag_cursor: 0,
+            flag_row_focus: FlagRowFocus::Variant,
             use_fancy: false,
             results_view: ResultsView::SplitVertical,
             matches_scroll: 0,
@@ -266,16 +275,31 @@ impl<'a> App<'a> {
         self.update_borders();
     }
 
-    /// Toggle the flag at `flag_cursor`.
-    fn toggle_flag(&mut self) {
-        match self.flag_cursor {
-            0 => self.flags.case_insensitive = !self.flags.case_insensitive,
-            1 => self.flags.multiline = !self.flags.multiline,
-            2 => self.flags.dotall = !self.flags.dotall,
-            3 => self.flags.global = !self.flags.global,
-            _ => {}
-        }
+    /// Cycle the engine variant (global shortcut and flag row Space/Enter).
+    pub fn cycle_variant(&mut self) {
+        self.use_fancy = !self.use_fancy;
         self.mark_dirty();
+    }
+
+    /// Toggle the flag currently highlighted in the flag row, or cycle the
+    /// variant if the variant selector is focused.
+    fn activate_flag_row(&mut self) {
+        match self.flag_row_focus {
+            FlagRowFocus::Variant => self.cycle_variant(),
+            FlagRowFocus::Flag(i) => {
+                match i {
+                    0 => {
+                        self.flags.case_insensitive =
+                            !self.flags.case_insensitive
+                    }
+                    1 => self.flags.multiline = !self.flags.multiline,
+                    2 => self.flags.dotall = !self.flags.dotall,
+                    3 => self.flags.global = !self.flags.global,
+                    _ => {}
+                }
+                self.mark_dirty();
+            }
+        }
     }
 
     /// Scroll the active results sub-pane up by one line.
@@ -387,8 +411,12 @@ fn handle_insert(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
 
     match key.code {
         Esc => {
-            app.mode = AppMode::Nav;
-            app.update_borders();
+            if app.show_help {
+                app.show_help = false;
+            } else {
+                app.mode = AppMode::Nav;
+                app.update_borders();
+            }
         }
         _ => match app.focus {
             Focus::Pattern => {
@@ -401,7 +429,7 @@ fn handle_insert(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
             }
             Focus::Flags => {
                 if key.code == Char(' ') {
-                    app.toggle_flag();
+                    app.activate_flag_row();
                 }
             }
             Focus::Results => {} // Results pane is never in insert mode
@@ -420,12 +448,10 @@ fn handle_nav(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
 
         // Help overlay
         (Char('?'), KM::NONE) => app.show_help = !app.show_help,
+        (Esc, KM::NONE) if app.show_help => app.show_help = false,
 
-        // Fancy-regex toggle
-        (Char('f'), KM::NONE) => {
-            app.use_fancy = !app.use_fancy;
-            app.mark_dirty();
-        }
+        // Cycle engine variant (f for fancy-regex roots, generic across engines)
+        (Char('f'), KM::NONE) => app.cycle_variant(),
 
         // Cycle results view
         (Char('v'), KM::NONE) => {
@@ -459,19 +485,23 @@ fn handle_nav(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
             }
         }
         (Left, KM::NONE) if app.focus == Focus::Flags => {
-            if app.flag_cursor > 0 {
-                app.flag_cursor -= 1;
-            }
+            app.flag_row_focus = match &app.flag_row_focus {
+                FlagRowFocus::Variant => FlagRowFocus::Variant,
+                FlagRowFocus::Flag(0) => FlagRowFocus::Variant,
+                FlagRowFocus::Flag(i) => FlagRowFocus::Flag(i - 1),
+            };
         }
         (Right, KM::NONE) if app.focus == Focus::Flags => {
-            if app.flag_cursor < 3 {
-                app.flag_cursor += 1;
-            }
+            app.flag_row_focus = match &app.flag_row_focus {
+                FlagRowFocus::Variant => FlagRowFocus::Flag(0),
+                FlagRowFocus::Flag(i) if *i < 3 => FlagRowFocus::Flag(i + 1),
+                FlagRowFocus::Flag(i) => FlagRowFocus::Flag(*i),
+            };
         }
 
-        // Space — toggle flag when flags row is focused
+        // Space/Enter — activate focused flag row item
         (Char(' '), KM::NONE) if app.focus == Focus::Flags => {
-            app.toggle_flag();
+            app.activate_flag_row();
         }
 
         // Enter or printable char — re-enter insert mode on text panes
@@ -546,19 +576,15 @@ fn render_engine_bar(app: &App, frame: &mut Frame, area: Rect) {
     } else {
         " [ Rust · regex ] "
     };
-    let bar = Paragraph::new(Line::from(vec![
-        Span::styled(
+    frame.render_widget(
+        Paragraph::new(Span::styled(
             engine_name,
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            " (f: toggle fancy-regex  ?:help)",
-            Style::default().fg(Color::DarkGray),
-        ),
-    ]));
-    frame.render_widget(bar, area);
+        )),
+        area,
+    );
 }
 
 fn render_pattern(app: &App, frame: &mut Frame, area: Rect) {
@@ -567,8 +593,26 @@ fn render_pattern(app: &App, frame: &mut Frame, area: Rect) {
 
 fn render_flags(app: &App, frame: &mut Frame, area: Rect) {
     let flags = &app.flags;
-    let cursor = app.flag_cursor;
-    let focused = app.focus == Focus::Flags;
+    let focus = &app.flag_row_focus;
+    let row_focused = app.focus == Focus::Flags;
+    let sep = Span::styled(" │ ", Style::default().fg(Color::DarkGray));
+
+    // Variant selector at the left of the row.
+    let variant_label = if app.use_fancy {
+        "fancy-regex"
+    } else {
+        "regex"
+    };
+    let variant_focused = row_focused && *focus == FlagRowFocus::Variant;
+    let variant_style = if variant_focused {
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Cyan)
+    };
+    let variant_span =
+        Span::styled(format!(" [{}] ", variant_label), variant_style);
 
     let flag_defs = [
         ("Case insensitive", flags.case_insensitive),
@@ -577,32 +621,25 @@ fn render_flags(app: &App, frame: &mut Frame, area: Rect) {
         ("Global", flags.global),
     ];
 
-    let spans: Vec<Span> = flag_defs
-        .iter()
-        .enumerate()
-        .flat_map(|(i, (label, on))| {
-            let indicator = if *on { "◉" } else { "○" };
-            let is_cursor = focused && i == cursor;
-            let style = if is_cursor {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
-            } else if *on {
-                Style::default().fg(Color::Green)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-            let sep = if i < flag_defs.len() - 1 {
-                Span::styled(" │", Style::default().fg(Color::DarkGray))
-            } else {
-                Span::raw("")
-            };
-            vec![
-                Span::styled(format!(" {} {} ", indicator, label), style),
-                sep,
-            ]
-        })
-        .collect();
+    let mut spans = vec![variant_span, sep.clone()];
+
+    for (i, (label, on)) in flag_defs.iter().enumerate() {
+        let indicator = if *on { "◉" } else { "○" };
+        let is_cursor = row_focused && *focus == FlagRowFocus::Flag(i);
+        let style = if is_cursor {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else if *on {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        spans.push(Span::styled(format!(" {} {} ", indicator, label), style));
+        if i < flag_defs.len() - 1 {
+            spans.push(sep.clone());
+        }
+    }
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -1044,8 +1081,8 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
             " When Flags row is focused:",
             Style::default().fg(Color::Green),
         )),
-        Line::raw("   ←  →        Move between flags"),
-        Line::raw("   Space       Toggle flag"),
+        Line::raw("   ←  →        Move between variant selector and flags"),
+        Line::raw("   Space       Toggle flag / cycle variant"),
         Line::raw(""),
         Line::from(Span::styled(
             " Results views (v to cycle):",
