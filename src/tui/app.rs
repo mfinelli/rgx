@@ -368,8 +368,6 @@ impl<'a> App<'a> {
     }
 }
 
-// ─── Event Handling ───────────────────────────────────────────────────────────
-
 /// Process one key event. Returns `true` if the application should quit.
 /// Always-available ctrl shortcuts (work inside text fields)
 pub fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
@@ -1132,5 +1130,51 @@ fn truncate(s: &str, max_chars: usize) -> String {
         format!("{}…", collected)
     } else {
         collected
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate;
+
+    #[test]
+    fn truncate_short_string_unchanged() {
+        assert_eq!(truncate("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_exact_length_unchanged() {
+        assert_eq!(truncate("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_long_string_appends_ellipsis() {
+        assert_eq!(truncate("hello world", 5), "hello…");
+    }
+
+    #[test]
+    fn truncate_empty_string() {
+        assert_eq!(truncate("", 5), "");
+    }
+
+    #[test]
+    fn truncate_max_zero() {
+        assert_eq!(truncate("hello", 0), "…");
+    }
+
+    #[test]
+    fn truncate_multibyte_chars_counted_as_one() {
+        // "héllo" is 5 chars but 6 bytes — truncate should count chars not bytes
+        assert_eq!(truncate("héllo", 5), "héllo");
+        assert_eq!(truncate("héllo world", 5), "héllo…");
+    }
+
+    #[test]
+    fn truncate_ellipsis_is_single_char() {
+        // The appended … should not itself count toward max_chars
+        let result = truncate("abcdef", 3);
+        assert_eq!(result, "abc…");
+        // Result has 4 chars (3 + ellipsis), not 3
+        assert_eq!(result.chars().count(), 4);
     }
 }
