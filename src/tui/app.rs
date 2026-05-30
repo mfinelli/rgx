@@ -242,6 +242,9 @@ impl<'a> App<'a> {
     }
 
     /// Cycle focus forward: Pattern → Flags → Input → Results → Pattern
+    ///
+    /// Does not enter Insert mode — Tab cycling should never capture input.
+    /// Insert mode activates only when the user presses Enter or types a char.
     fn cycle_focus(&mut self) {
         self.focus = match self.focus {
             Focus::Pattern => Focus::Flags,
@@ -249,10 +252,6 @@ impl<'a> App<'a> {
             Focus::Input => Focus::Results,
             Focus::Results => Focus::Pattern,
         };
-        // Re-entering a text field from nav switches to insert mode.
-        if matches!(self.focus, Focus::Pattern | Focus::Input) {
-            self.mode = AppMode::Insert;
-        }
         self.update_borders();
     }
 
@@ -264,9 +263,6 @@ impl<'a> App<'a> {
             Focus::Input => Focus::Flags,
             Focus::Results => Focus::Input,
         };
-        if matches!(self.focus, Focus::Pattern | Focus::Input) {
-            self.mode = AppMode::Insert;
-        }
         self.update_borders();
     }
 
