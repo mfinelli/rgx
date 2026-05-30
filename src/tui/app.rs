@@ -504,24 +504,33 @@ fn handle_nav(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
             app.activate_flag_row();
         }
 
-        // Enter or printable char — re-enter insert mode on text panes
-        (Enter, KM::NONE) | (Char(_), KM::NONE) => {
-            if matches!(app.focus, Focus::Pattern | Focus::Input) {
-                app.mode = AppMode::Insert;
-                app.update_borders();
-                if let Char(_) = key.code {
-                    match app.focus {
-                        Focus::Pattern => {
-                            app.pattern.input(key);
-                            app.mark_dirty();
-                        }
-                        Focus::Input => {
-                            app.input.input(key);
-                            app.mark_dirty();
-                        }
-                        _ => {}
-                    }
+        // Any editing-intent key re-enters insert mode on focused text panes
+        // and forwards the keypress so it takes effect immediately.
+        // Covers: printable chars, Enter, arrows, Backspace, Delete.
+        (Enter, KM::NONE)
+        | (Char(_), KM::NONE)
+        | (Up, KM::NONE)
+        | (Down, KM::NONE)
+        | (Left, KM::NONE)
+        | (Right, KM::NONE)
+        | (Backspace, KM::NONE)
+        | (Delete, KM::NONE)
+            if matches!(app.focus, Focus::Pattern | Focus::Input) =>
+        {
+            app.mode = AppMode::Insert;
+            app.update_borders();
+            // Forward the key so it takes effect immediately — the cursor
+            // moves or character is deleted without needing a second keypress.
+            match app.focus {
+                Focus::Pattern => {
+                    app.pattern.input(key);
+                    app.mark_dirty();
                 }
+                Focus::Input => {
+                    app.input.input(key);
+                    app.mark_dirty();
+                }
+                _ => {}
             }
         }
 
@@ -763,6 +772,10 @@ fn render_match_results(
 }
 
 /// Renders the input text with match spans highlighted and a scrollbar.
+///
+/// Uses a per-byte style map so overlapping spans are handled correctly —
+/// group highlights take precedence over full-match highlights where they
+/// overlap, avoiding duplicate text from cursor rewinding.
 fn render_preview(
     app: &App,
     input: &str,
@@ -777,7 +790,10 @@ fn render_preview(
         .add_modifier(Modifier::BOLD);
     let group_style = Style::default().fg(Color::Black).bg(Color::Cyan);
 
-    let mut highlights: Vec<(usize, usize, Style)> = matches
+    // Collect highlights in priority order: full matches first, groups after.
+    // When written into the style map, groups overwrite match styles where
+    // they overlap, giving groups visual precedence.
+    let highlights: Vec<(usize, usize, Style)> = matches
         .iter()
         .map(|m| (m.span.0, m.span.1, match_style))
         .chain(matches.iter().flat_map(|m| {
@@ -787,7 +803,6 @@ fn render_preview(
                 .filter_map(|g| g.span.map(|(s, e)| (s, e, group_style)))
         }))
         .collect();
-    highlights.sort_by_key(|&(s, _, _)| s);
 
     let mut all_lines: Vec<Line> = Vec::new();
     let mut byte_pos: usize = 0;
@@ -795,24 +810,46 @@ fn render_preview(
     for raw_line in input.split('\n') {
         let line_start = byte_pos;
         let line_end = byte_pos + raw_line.len();
-        let mut spans: Vec<Span> = Vec::new();
-        let mut cursor = line_start;
 
+        // Build a style map over the bytes of this line.
+        // None = unstyled, Some(style) = highlighted.
+        let mut style_map: Vec<Option<Style>> = vec![None; raw_line.len()];
         for &(hs, he, style) in &highlights {
-            let hs = hs.max(line_start).min(line_end);
-            let he = he.max(line_start).min(line_end);
+            let hs =
+                hs.max(line_start).min(line_end).saturating_sub(line_start);
+            let he =
+                he.max(line_start).min(line_end).saturating_sub(line_start);
             if hs >= he {
                 continue;
             }
-            if hs > cursor {
-                spans.push(Span::raw(input[cursor..hs].to_string()));
+            for cell in style_map[hs..he].iter_mut() {
+                *cell = Some(style);
             }
-            spans.push(Span::styled(input[hs..he].to_string(), style));
-            cursor = he;
         }
-        if cursor < line_end {
-            spans.push(Span::raw(input[cursor..line_end].to_string()));
+
+        // Merge consecutive bytes with the same style into spans.
+        // We walk char boundaries to avoid slicing mid-codepoint.
+        let mut spans: Vec<Span> = Vec::new();
+        let mut seg_start = 0;
+        let mut chars = raw_line.char_indices().peekable();
+
+        while let Some((i, _)) = chars.next() {
+            let current_style = style_map[i];
+            let next_style = chars.peek().map(|(j, _)| style_map[*j]);
+
+            if next_style != Some(current_style) {
+                // Find the end of this segment: start of next char or line end
+                let seg_end =
+                    chars.peek().map(|(j, _)| *j).unwrap_or(raw_line.len());
+                let text = &raw_line[seg_start..seg_end];
+                match current_style {
+                    Some(s) => spans.push(Span::styled(text.to_string(), s)),
+                    None => spans.push(Span::raw(text.to_string())),
+                }
+                seg_start = seg_end;
+            }
         }
+
         if spans.is_empty() {
             spans.push(Span::raw(raw_line.to_string()));
         }
