@@ -453,17 +453,10 @@ fn handle_nav(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
         // Shift+Tab — cycle focus backward
         (BackTab, _) => app.cycle_focus_back(),
 
-        // Arrow keys — behaviour depends on focused pane
-        (Up, KM::NONE) => {
-            if app.focus == Focus::Results {
-                app.scroll_up();
-            }
-        }
-        (Down, KM::NONE) => {
-            if app.focus == Focus::Results {
-                app.scroll_down();
-            }
-        }
+        // Arrow keys — scroll results when results pane is focused.
+        // Up/Down on text panes are handled by the editing-intent arm below.
+        (Up, KM::NONE) if app.focus == Focus::Results => app.scroll_up(),
+        (Down, KM::NONE) if app.focus == Focus::Results => app.scroll_down(),
         // Left/Right in results: toggle active sub-pane in split views
         (Left, KM::NONE) | (Right, KM::NONE) if app.focus == Focus::Results => {
             if matches!(
@@ -586,7 +579,7 @@ fn render_engine_bar(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 fn render_pattern(app: &App, frame: &mut Frame, area: Rect) {
-    frame.render_widget(app.pattern.widget(), area);
+    frame.render_widget(&app.pattern, area);
 }
 
 fn render_flags(app: &App, frame: &mut Frame, area: Rect) {
@@ -643,7 +636,7 @@ fn render_flags(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 fn render_input(app: &App, frame: &mut Frame, area: Rect) {
-    frame.render_widget(app.input.widget(), area);
+    frame.render_widget(&app.input, area);
 }
 
 fn render_results(app: &App, frame: &mut Frame, area: Rect) {
