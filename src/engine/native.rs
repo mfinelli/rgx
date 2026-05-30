@@ -231,3 +231,73 @@ fn normalized_to_rust_replacement(s: &str) -> String {
     })
     .to_string()
 }
+// ─── Status line invocation renderers ────────────────────────────────────────
+// Each renderer produces the idiomatic invocation string for its engine,
+// shown in the status line. As more engines are added they will each have
+// their own renderer function here or in their own module.
+
+/// Renders the `regex` crate invocation using `RegexBuilder` for flags,
+/// which is the idiomatic API for that crate.
+///
+/// Example: `RegexBuilder::new(r"hello").case_insensitive(true).build()`
+pub fn render_invocation_regex_crate(pattern: &str, flags: &Flags) -> String {
+    if pattern.is_empty() {
+        return "regex · RE2-style, linear time, no lookahead".to_string();
+    }
+
+    let mut builder_calls = String::new();
+    if flags.case_insensitive {
+        builder_calls.push_str(".case_insensitive(true)");
+    }
+    if flags.multiline {
+        builder_calls.push_str(".multi_line(true)");
+    }
+    if flags.dotall {
+        builder_calls.push_str(".dot_matches_new_line(true)");
+    }
+    if flags.extended {
+        builder_calls.push_str(".ignore_whitespace(true)");
+    }
+
+    if builder_calls.is_empty() {
+        format!("Regex::new(r\"{}\")", pattern)
+    } else {
+        format!(
+            "RegexBuilder::new(r\"{}\"){}.build()",
+            pattern, builder_calls
+        )
+    }
+}
+
+/// Renders the `fancy-regex` crate invocation using inline flag syntax,
+/// which is how fancy-regex applies flags.
+///
+/// Example: `Regex::new(r"(?im)hello")`
+pub fn render_invocation_fancy_regex(pattern: &str, flags: &Flags) -> String {
+    if pattern.is_empty() {
+        return "fancy-regex · PCRE-style, lookahead/lookbehind/backreferences"
+            .to_string();
+    }
+
+    let mut flag_chars = String::new();
+    if flags.case_insensitive {
+        flag_chars.push('i');
+    }
+    if flags.multiline {
+        flag_chars.push('m');
+    }
+    if flags.dotall {
+        flag_chars.push('s');
+    }
+    if flags.extended {
+        flag_chars.push('x');
+    }
+
+    let rendered = if flag_chars.is_empty() {
+        pattern.to_string()
+    } else {
+        format!("(?{}){}", flag_chars, pattern)
+    };
+
+    format!("fancy_regex::Regex::new(r\"{}\")", rendered)
+}

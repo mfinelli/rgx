@@ -14,7 +14,10 @@ use ratatui::{
 use ratatui_textarea::TextArea;
 
 use crate::engine::{
-    native::RustEngine,
+    native::{
+        RustEngine, render_invocation_fancy_regex,
+        render_invocation_regex_crate,
+    },
     types::{EngineError, EvalMode, EvalRequest, EvalResponse, Flags, Match},
 };
 
@@ -315,36 +318,17 @@ impl<'a> App<'a> {
     }
 
     /// Build the rendered invocation string for the status line.
+    /// Returns the fully rendered invocation shown in the status line.
+    ///
+    /// Delegates to the engine-specific renderer so each engine shows its
+    /// own idiomatic syntax. As more engines are added this will dispatch
+    /// to each engine's own implementation.
     pub fn status_invocation(&self) -> String {
         let pattern = self.pattern.lines().join("");
-        if pattern.is_empty() {
-            return String::from("Rust · regex crate (RE2-style, linear time)");
-        }
-
-        let mut flags = String::new();
-        if self.flags.case_insensitive {
-            flags.push('i');
-        }
-        if self.flags.multiline {
-            flags.push('m');
-        }
-        if self.flags.dotall {
-            flags.push('s');
-        }
-
-        let engine_note = if self.use_fancy {
-            "fancy-regex"
+        if self.use_fancy {
+            render_invocation_fancy_regex(&pattern, &self.flags)
         } else {
-            "regex"
-        };
-
-        if flags.is_empty() {
-            format!("Rust ({}) · Regex::new(r\"{}\")", engine_note, pattern)
-        } else {
-            format!(
-                "Rust ({}) · RegexBuilder::new(r\"{}\").flags(\"{}\").build()",
-                engine_note, pattern, flags
-            )
+            render_invocation_regex_crate(&pattern, &self.flags)
         }
     }
 }
@@ -965,7 +949,7 @@ fn render_status(app: &App, frame: &mut Frame, area: Rect) {
         (area.width as usize).saturating_sub(left_str.len() + right_str.len());
 
     let line = Line::from(vec![
-        Span::styled(left_str, Style::default().fg(Color::DarkGray)),
+        Span::styled(left_str, Style::default().fg(Color::White)),
         Span::raw(" ".repeat(padding)),
         Span::styled(
             right_str,
@@ -976,8 +960,7 @@ fn render_status(app: &App, frame: &mut Frame, area: Rect) {
     ]);
 
     frame.render_widget(
-        Paragraph::new(line)
-            .style(Style::default().bg(Color::DarkGray).fg(Color::White)),
+        Paragraph::new(line).style(Style::default().bg(Color::DarkGray)),
         area,
     );
 }
