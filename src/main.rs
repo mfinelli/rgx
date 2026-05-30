@@ -22,7 +22,7 @@ use anyhow::{Context as _, Result};
 use clap::Parser;
 use clap_complete::generate;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event},
+    event::{self, Event},
     execute,
     terminal::{
         EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
@@ -46,8 +46,7 @@ struct TerminalGuard;
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ =
-            execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+        let _ = execute!(io::stdout(), LeaveAlternateScreen,);
     }
 }
 
@@ -63,7 +62,7 @@ fn main() -> Result<()> {
     }
 
     enable_raw_mode()?;
-    execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(io::stdout(), EnterAlternateScreen)?;
 
     // Installed immediately after raw mode is enabled so it fires even if
     // the code below panics. Normal-path cleanup is handled explicitly below.
@@ -74,14 +73,10 @@ fn main() -> Result<()> {
 
     let result = run(&mut terminal);
 
-    // Normal path cleanup (errors are captured and returned)
+    // Normal path cleanup — errors captured and returned.
     let cleanup: Result<()> = (|| {
         disable_raw_mode()?;
-        execute!(
-            terminal.backend_mut(),
-            LeaveAlternateScreen,
-            DisableMouseCapture
-        )?;
+        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         terminal.show_cursor()?;
         Ok(())
     })();

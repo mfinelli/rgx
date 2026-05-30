@@ -42,23 +42,22 @@ Rust matches. Everything else builds on this foundation.
 
 ## Phase 2 — Flags, status, and navigation
 
-**5. Flag row**
+**5. Flag row** ✓
 - Per-engine flag toggles (case insensitive, multiline, dotall, global)
-- Bidirectional sync: toggling a flag updates evaluation; inline `(?i)` prefix
-  detection updates the toggle
-- Flags hidden (not greyed) when not meaningful for the current engine
+- Flags hidden when not meaningful deferred to phase 9 (multi-engine)
+- Inline `(?i)` detection removed — see DESIGN.md
 
-**6. Status line**
+**6. Status line** ✓
 - Always-visible rendered invocation for current engine + flags
 - Live updates with every change
 - Match count on the right
 
-**7. Navigation model**
+**7. Navigation model** ✓
 - Escape → nav layer, bare-key shortcuts active
-- `ctrl+p` / `ctrl+t` / `ctrl+g` quick-jump keybinds (work inside text fields)
-- `ctrl+z` / `ctrl+shift+z` undo/redo (wired to in-memory stack for now —
-  SQLite comes later)
-- Full keybind table from DESIGN.md implemented and conflict-checked
+- `ctrl+p` / `ctrl+t` quick-jump keybinds (work inside text fields)
+- `ctrl+g` (replacement field jump) deferred to phase 6 (replace mode)
+- `ctrl+z` / `ctrl+shift+z` undo/redo deferred to phase 14 (SQLite sessions)
+- Full keybind table implemented and conflict-checked
 - `?` opens keybind reference panel
 - Terminal-too-small guard
 

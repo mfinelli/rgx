@@ -43,6 +43,9 @@ pub struct EvalRequest {
     /// Normalized replacement string using {1}, {name} syntax.
     /// Each engine translates to its native backreference syntax.
     pub replacement: String,
+    /// Use fancy-regex instead of the regex crate (Rust engine only).
+    /// Carried in the request so the engine struct itself is stateless.
+    pub use_fancy: bool,
 }
 
 /// A single capture group within a match.

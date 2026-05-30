@@ -1,15 +1,13 @@
 use super::types::*;
 use regex::RegexBuilder;
 
-pub struct RustEngine {
-    /// When true, uses fancy-regex which adds lookahead/lookbehind/backreferences
-    /// at the cost of the linear-time guarantee. Off by default.
-    pub use_fancy: bool,
-}
+/// The native Rust regex engine. Stateless — all configuration is carried
+/// in `EvalRequest` so the same instance can be shared across the app.
+pub struct RustEngine;
 
 impl RustEngine {
     pub fn new() -> Self {
-        Self { use_fancy: false }
+        Self
     }
 
     pub fn evaluate(
@@ -20,7 +18,7 @@ impl RustEngine {
             return Ok(EvalResponse::default());
         }
 
-        if self.use_fancy {
+        if req.use_fancy {
             self.eval_fancy(req)
         } else {
             self.eval_regex(req)

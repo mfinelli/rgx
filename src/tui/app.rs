@@ -204,6 +204,7 @@ impl<'a> App<'a> {
             input: input_text,
             mode: EvalMode::Match,
             replacement: String::new(),
+            use_fancy: self.use_fancy,
         };
 
         self.eval_result = Some(engine.evaluate(&req));
@@ -250,27 +251,28 @@ impl<'a> App<'a> {
         self.update_borders();
     }
 
-    /// Cycle focus forward: Pattern → Flags → Input → Results → Pattern
+    /// Cycle focus forward: Pattern → Input → Flags → Results → Pattern
     ///
+    /// Order matches the visual top-to-bottom layout.
     /// Does not enter Insert mode — Tab cycling should never capture input.
     /// Insert mode activates only when the user presses Enter or types a char.
     fn cycle_focus(&mut self) {
         self.focus = match self.focus {
-            Focus::Pattern => Focus::Flags,
-            Focus::Flags => Focus::Input,
-            Focus::Input => Focus::Results,
+            Focus::Pattern => Focus::Input,
+            Focus::Input => Focus::Flags,
+            Focus::Flags => Focus::Results,
             Focus::Results => Focus::Pattern,
         };
         self.update_borders();
     }
 
-    /// Cycle focus backward.
+    /// Cycle focus backward: Pattern → Results → Flags → Input → Pattern
     fn cycle_focus_back(&mut self) {
         self.focus = match self.focus {
             Focus::Pattern => Focus::Results,
-            Focus::Flags => Focus::Pattern,
-            Focus::Input => Focus::Flags,
-            Focus::Results => Focus::Input,
+            Focus::Input => Focus::Pattern,
+            Focus::Flags => Focus::Input,
+            Focus::Results => Focus::Flags,
         };
         self.update_borders();
     }
@@ -366,27 +368,14 @@ impl<'a> App<'a> {
     }
 }
 
+// ─── Event Handling ───────────────────────────────────────────────────────────
+
 /// Process one key event. Returns `true` if the application should quit.
 /// Always-available ctrl shortcuts (work inside text fields)
 pub fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
     use KeyCode::*;
     use KeyModifiers as KM;
 
-    // ctrl+z — undo within the active text field
-    if key.modifiers == KM::CONTROL && key.code == Char('z') {
-        match app.focus {
-            Focus::Pattern => {
-                app.pattern.undo();
-                app.mark_dirty();
-            }
-            Focus::Input => {
-                app.input.undo();
-                app.mark_dirty();
-            }
-            _ => {}
-        }
-        return false;
-    }
 
     // ctrl+p — jump to pattern field
     if key.modifiers == KM::CONTROL && key.code == Char('p') {
@@ -552,14 +541,14 @@ pub fn render(app: &App, frame: &mut Frame) {
     }
 
     // Vertical layout:
-    // [engine bar 1] [pattern 3] [flags 1] [input flex] [results flex] [status 1] [hint 1]
+    // [engine bar 1] [pattern 3] [input flex] [flags 1] [results flex] [status 1] [hint 1]
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // engine bar
             Constraint::Length(3), // pattern
-            Constraint::Length(1), // flags row
             Constraint::Min(4),    // input
+            Constraint::Length(1), // flags row
             Constraint::Min(4),    // results
             Constraint::Length(1), // status
             Constraint::Length(1), // key hint
@@ -568,8 +557,8 @@ pub fn render(app: &App, frame: &mut Frame) {
 
     render_engine_bar(app, frame, chunks[0]);
     render_pattern(app, frame, chunks[1]);
-    render_flags(app, frame, chunks[2]);
-    render_input(app, frame, chunks[3]);
+    render_input(app, frame, chunks[2]);
+    render_flags(app, frame, chunks[3]);
     render_results(app, frame, chunks[4]);
     render_status(app, frame, chunks[5]);
     render_hint(app, frame, chunks[6]);
@@ -1093,7 +1082,6 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         )),
         Line::raw("   ctrl+p      Jump to pattern field"),
         Line::raw("   ctrl+t      Jump to test input field"),
-        Line::raw("   ctrl+z      Undo (within field)"),
         Line::raw(""),
         Line::from(Span::styled(
             " Nav layer (after Escape):",

@@ -293,11 +293,7 @@ multiline:   bool         — ^ and $ match line boundaries vs string boundaries
 
 ### Inline Flag Detection
 
-Some users type `(?i)` directly in the pattern field rather than using the flag toggles:
-
-- **Simple case**: `(?flags)` at the very start of the pattern — detect, strip from pattern, sync to toggles
-- **Scoped form** `(?i:...)` or flags mid-pattern — leave as-is, show indicator "pattern contains inline flags", do not attempt to decompose
-- **Toggles represent out-of-band flags only** — inline flags in the pattern are the user's explicit choice and are not touched beyond the simple prefix case
+Not implemented. Inline flags (e.g. `(?i)`) typed directly in the pattern field are passed to the engine as-is and not synced to the flag row toggles. This is intentional — silently stripping and rewriting the pattern would be surprising behaviour. Experts who use inline flag syntax know what they're doing; everyone else uses the flag row.
 
 ---
 
