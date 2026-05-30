@@ -116,6 +116,7 @@ The primary workflow is:
 | Toggle escape sequence reference | `w` |
 | Toggle code preview panel | `p` |
 | Toggle replace mode | `m` |
+| Cycle results view | `v` |
 | Rescan runtimes | `r` |
 | Quit | `q` |
 | Cycle panes | `Tab` / `Shift+Tab` |
@@ -370,6 +371,17 @@ Auto-suggest flavor upgrade (BRE → ERE → PCRE) where applicable. Never silen
 
 ## Results Display
 
+### Results Pane Views
+
+The results pane has four views, cycled with `v` in the nav layer:
+
+- `split_vertical` — input preview (top) + match breakdown (bottom)
+- `split_horizontal` — input preview (left) + match breakdown (right)
+- `preview` — input preview only, full pane
+- `matches` — match breakdown only, full pane
+
+Default view is configurable (`default_results_view` in config). Both sub-panes are independently scrollable when focused — arrow keys scroll when the results pane has focus.
+
 ### Match Mode
 
 - Summary line: `N matches` or `no match` or `error: ...`
@@ -377,7 +389,7 @@ Auto-suggest flavor upgrade (BRE → ERE → PCRE) where applicable. Never silen
   - Full match text and byte span `[start..end]`
   - Each capture group: index, name (if named), value, span
   - Optional/unmatched groups shown explicitly as `group 2: (unmatched)` — not omitted
-- Input pane: matched spans highlighted inline with ANSI color (or bracket markers under `$NO_COLOR`)
+- Input preview: matched spans highlighted inline with ANSI color (or bracket markers under `$NO_COLOR`)
 - Error state: parse error shown inline below pattern field with position indicator if available
 
 ### No-Match vs Error
@@ -696,6 +708,7 @@ File location: `~/.config/rgx/config.toml` (XDG config dir).
 nerd_fonts = false           # or set RGX_NERD_FONTS=1 env var
 default_language = "rust"    # which tab opens by default
 mouse = false                # enable mouse support
+default_results_view = "split_vertical"  # "split_vertical" | "split_horizontal" | "preview" | "matches"
 
 # Evaluation
 debounce_ms = 150

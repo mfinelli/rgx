@@ -6,7 +6,10 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{
+        Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar,
+        ScrollbarOrientation, ScrollbarState, Wrap,
+    },
 };
 use ratatui_textarea::TextArea;
 
@@ -15,7 +18,7 @@ use crate::engine::{
     types::{EngineError, EvalMode, EvalRequest, EvalResponse, Flags, Match},
 };
 
-// ─── Mode & Focus ────────────────────────────────────────────────────────────
+// ─── Mode, Focus, Results View ───────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppMode {
@@ -30,6 +33,49 @@ pub enum Focus {
     Pattern,
     Input,
     Flags,
+    Results,
+}
+
+/// The four results pane layouts, cycled with `v` in nav mode.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResultsView {
+    /// Input preview (top) + match breakdown (bottom).
+    SplitVertical,
+    /// Input preview (left) + match breakdown (right).
+    SplitHorizontal,
+    /// Input preview only, full pane.
+    Preview,
+    /// Match breakdown only, full pane.
+    Matches,
+}
+
+impl ResultsView {
+    /// Advance to the next view in the cycle.
+    pub fn next(&self) -> Self {
+        match self {
+            Self::SplitVertical => Self::SplitHorizontal,
+            Self::SplitHorizontal => Self::Preview,
+            Self::Preview => Self::Matches,
+            Self::Matches => Self::SplitVertical,
+        }
+    }
+
+    /// Short label shown in the hint bar.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::SplitVertical => "split-v",
+            Self::SplitHorizontal => "split-h",
+            Self::Preview => "preview",
+            Self::Matches => "matches",
+        }
+    }
+}
+
+/// Which sub-pane receives scroll input in split views.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResultsSubFocus {
+    Preview,
+    Matches,
 }
 
 // ─── App State ───────────────────────────────────────────────────────────────
@@ -47,9 +93,18 @@ pub struct App<'a> {
 
     pub use_fancy: bool,
 
+    pub results_view: ResultsView,
+    /// Scroll offset for the match breakdown sub-pane.
+    pub matches_scroll: usize,
+    /// Scroll offset for the input preview sub-pane.
+    pub preview_scroll: usize,
+
     pub eval_result: Option<Result<EvalResponse, EngineError>>,
     pub last_edit: Option<Instant>,
     pub debounce_ms: u64,
+
+    /// Which sub-pane is active in split views (determines scroll target).
+    pub results_sub_focus: ResultsSubFocus,
 
     /// Whether to show the keybind help overlay.
     pub show_help: bool,
@@ -78,14 +133,18 @@ impl<'a> App<'a> {
             pattern,
             input,
             flags: Flags {
-                global: true, // default on as per design
+                global: true,
                 ..Default::default()
             },
             flag_cursor: 0,
             use_fancy: false,
+            results_view: ResultsView::SplitVertical,
+            matches_scroll: 0,
+            preview_scroll: 0,
             eval_result: None,
             last_edit: None,
             debounce_ms: 150,
+            results_sub_focus: ResultsSubFocus::Matches,
             show_help: false,
         }
     }
@@ -123,9 +182,12 @@ impl<'a> App<'a> {
         };
 
         self.eval_result = Some(engine.evaluate(&req));
+        // Reset scroll when results change.
+        self.matches_scroll = 0;
+        self.preview_scroll = 0;
     }
 
-    /// Update border styles to reflect current focus and mode.
+    /// Update border styles to reflect current focus.
     pub fn update_borders(&mut self) {
         let active = Style::default().fg(Color::Yellow);
         let inactive = Style::default().fg(Color::DarkGray);
@@ -152,20 +214,44 @@ impl<'a> App<'a> {
         );
     }
 
-    /// Move focus and switch to Insert mode.
-    fn jump_to(&mut self, focus: Focus) {
+    /// Move focus and switch to Insert mode (for text fields).
+    /// For non-text panes (Flags, Results) stays in Nav mode.
+    pub fn jump_to(&mut self, focus: Focus) {
+        let is_text = matches!(focus, Focus::Pattern | Focus::Input);
         self.focus = focus;
-        self.mode = AppMode::Insert;
+        if is_text {
+            self.mode = AppMode::Insert;
+        }
         self.update_borders();
     }
 
-    /// Cycle focus forward through the panes.
+    /// Cycle focus forward: Pattern → Flags → Input → Results → Pattern
     fn cycle_focus(&mut self) {
         self.focus = match self.focus {
             Focus::Pattern => Focus::Flags,
             Focus::Flags => Focus::Input,
-            Focus::Input => Focus::Pattern,
+            Focus::Input => Focus::Results,
+            Focus::Results => Focus::Pattern,
         };
+        // Re-entering a text field from nav switches to insert mode.
+        if matches!(self.focus, Focus::Pattern | Focus::Input) {
+            self.mode = AppMode::Insert;
+        }
+        self.update_borders();
+    }
+
+    /// Cycle focus backward.
+    fn cycle_focus_back(&mut self) {
+        self.focus = match self.focus {
+            Focus::Pattern => Focus::Results,
+            Focus::Flags => Focus::Pattern,
+            Focus::Input => Focus::Flags,
+            Focus::Results => Focus::Input,
+        };
+        if matches!(self.focus, Focus::Pattern | Focus::Input) {
+            self.mode = AppMode::Insert;
+        }
+        self.update_borders();
     }
 
     /// Toggle the flag at `flag_cursor`.
@@ -178,6 +264,54 @@ impl<'a> App<'a> {
             _ => {}
         }
         self.mark_dirty();
+    }
+
+    /// Scroll the active results sub-pane up by one line.
+    fn scroll_up(&mut self) {
+        match (&self.results_view, &self.results_sub_focus) {
+            (ResultsView::Preview, _)
+            | (
+                ResultsView::SplitVertical | ResultsView::SplitHorizontal,
+                ResultsSubFocus::Preview,
+            ) => {
+                self.preview_scroll = self.preview_scroll.saturating_sub(1);
+            }
+            (ResultsView::Matches, _)
+            | (
+                ResultsView::SplitVertical | ResultsView::SplitHorizontal,
+                ResultsSubFocus::Matches,
+            ) => {
+                self.matches_scroll = self.matches_scroll.saturating_sub(1);
+            }
+        }
+    }
+
+    /// Scroll the active results sub-pane down by one line.
+    fn scroll_down(&mut self) {
+        match (&self.results_view, &self.results_sub_focus) {
+            (ResultsView::Preview, _)
+            | (
+                ResultsView::SplitVertical | ResultsView::SplitHorizontal,
+                ResultsSubFocus::Preview,
+            ) => {
+                self.preview_scroll = self.preview_scroll.saturating_add(1);
+            }
+            (ResultsView::Matches, _)
+            | (
+                ResultsView::SplitVertical | ResultsView::SplitHorizontal,
+                ResultsSubFocus::Matches,
+            ) => {
+                self.matches_scroll = self.matches_scroll.saturating_add(1);
+            }
+        }
+    }
+
+    /// Toggle which sub-pane is active in split views.
+    fn toggle_sub_focus(&mut self) {
+        self.results_sub_focus = match self.results_sub_focus {
+            ResultsSubFocus::Preview => ResultsSubFocus::Matches,
+            ResultsSubFocus::Matches => ResultsSubFocus::Preview,
+        };
     }
 
     /// Build the rendered invocation string for the status line.
@@ -217,13 +351,14 @@ impl<'a> App<'a> {
 
 // ─── Event Handling ───────────────────────────────────────────────────────────
 
-/// Process one key event. Returns true if the application should quit.
+/// Process one key event. Returns `true` if the application should quit.
 pub fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
     use KeyCode::*;
     use KeyModifiers as KM;
 
-    // ctrl+z / ctrl+shift+z: undo/redo within the active text field.
-    // (Session-level undo comes in a later phase.)
+    // ── Always-available ctrl shortcuts (work inside text fields) ──
+
+    // ctrl+z — undo within the active text field
     if key.modifiers == KM::CONTROL && key.code == Char('z') {
         match app.focus {
             Focus::Pattern => {
@@ -234,18 +369,18 @@ pub fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
                 app.input.undo();
                 app.mark_dirty();
             }
-            Focus::Flags => {}
+            _ => {}
         }
         return false;
     }
 
-    // ctrl+p — jump to pattern field (works from anywhere)
+    // ctrl+p — jump to pattern field
     if key.modifiers == KM::CONTROL && key.code == Char('p') {
         app.jump_to(Focus::Pattern);
         return false;
     }
 
-    // ctrl+t — jump to test input field (works from anywhere)
+    // ctrl+t — jump to test input field
     if key.modifiers == KM::CONTROL && key.code == Char('t') {
         app.jump_to(Focus::Input);
         return false;
@@ -275,12 +410,11 @@ fn handle_insert(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
                 app.mark_dirty();
             }
             Focus::Flags => {
-                // Flags row doesn't accept text input; Esc already handled above.
-                // Space toggles the current flag.
-                if key.code == KeyCode::Char(' ') {
+                if key.code == Char(' ') {
                     app.toggle_flag();
                 }
             }
+            Focus::Results => {} // Results pane is never in insert mode
         },
     }
     false
@@ -303,22 +437,37 @@ fn handle_nav(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
             app.mark_dirty();
         }
 
-        // Tab — cycle focus
-        (Tab, KM::NONE) => {
-            app.cycle_focus();
-            app.update_borders();
-        }
-        (BackTab, _) => {
-            // Reverse cycle
-            app.focus = match app.focus {
-                Focus::Pattern => Focus::Input,
-                Focus::Flags => Focus::Pattern,
-                Focus::Input => Focus::Flags,
-            };
-            app.update_borders();
+        // Cycle results view
+        (Char('v'), KM::NONE) => {
+            app.results_view = app.results_view.next();
         }
 
-        // Arrow left/right — move flag cursor when focused on flags
+        // Tab — cycle focus forward
+        (Tab, KM::NONE) => app.cycle_focus(),
+
+        // Shift+Tab — cycle focus backward
+        (BackTab, _) => app.cycle_focus_back(),
+
+        // Arrow keys — behaviour depends on focused pane
+        (Up, KM::NONE) => {
+            if app.focus == Focus::Results {
+                app.scroll_up();
+            }
+        }
+        (Down, KM::NONE) => {
+            if app.focus == Focus::Results {
+                app.scroll_down();
+            }
+        }
+        // Left/Right in results: toggle active sub-pane in split views
+        (Left, KM::NONE) | (Right, KM::NONE) if app.focus == Focus::Results => {
+            if matches!(
+                app.results_view,
+                ResultsView::SplitVertical | ResultsView::SplitHorizontal
+            ) {
+                app.toggle_sub_focus();
+            }
+        }
         (Left, KM::NONE) if app.focus == Focus::Flags => {
             if app.flag_cursor > 0 {
                 app.flag_cursor -= 1;
@@ -330,17 +479,16 @@ fn handle_nav(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
             }
         }
 
-        // Space — toggle flag when focused on flags
+        // Space — toggle flag when flags row is focused
         (Char(' '), KM::NONE) if app.focus == Focus::Flags => {
             app.toggle_flag();
         }
 
-        // Enter / any printable char — re-enter insert mode on the focused pane
+        // Enter or printable char — re-enter insert mode on text panes
         (Enter, KM::NONE) | (Char(_), KM::NONE) => {
-            if app.focus != Focus::Flags {
+            if matches!(app.focus, Focus::Pattern | Focus::Input) {
                 app.mode = AppMode::Insert;
                 app.update_borders();
-                // Forward the character if it was a printable key
                 if let Char(_) = key.code {
                     match app.focus {
                         Focus::Pattern => {
@@ -351,7 +499,7 @@ fn handle_nav(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
                             app.input.input(key);
                             app.mark_dirty();
                         }
-                        Focus::Flags => {}
+                        _ => {}
                     }
                 }
             }
@@ -367,11 +515,12 @@ fn handle_nav(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
 pub fn render(app: &App, frame: &mut Frame) {
     let area = frame.area();
 
-    // Guard: minimum terminal size
     if area.width < 40 || area.height < 12 {
-        let msg = Paragraph::new("terminal too small — resize to continue")
-            .style(Style::default().fg(Color::Red));
-        frame.render_widget(msg, area);
+        frame.render_widget(
+            Paragraph::new("terminal too small — resize to continue")
+                .style(Style::default().fg(Color::Red)),
+            area,
+        );
         return;
     }
 
@@ -417,7 +566,7 @@ fn render_engine_bar(app: &App, frame: &mut Frame, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            " (press f to toggle fancy-regex, ? for help)",
+            " (f: toggle fancy-regex  ?:help)",
             Style::default().fg(Color::DarkGray),
         ),
     ]));
@@ -446,7 +595,6 @@ fn render_flags(app: &App, frame: &mut Frame, area: Rect) {
         .flat_map(|(i, (label, on))| {
             let indicator = if *on { "◉" } else { "○" };
             let is_cursor = focused && i == cursor;
-
             let style = if is_cursor {
                 Style::default()
                     .fg(Color::Yellow)
@@ -456,20 +604,19 @@ fn render_flags(app: &App, frame: &mut Frame, area: Rect) {
             } else {
                 Style::default().fg(Color::DarkGray)
             };
-
-            let text = format!(" {} {} ", indicator, label);
             let sep = if i < flag_defs.len() - 1 {
                 Span::styled(" │", Style::default().fg(Color::DarkGray))
             } else {
                 Span::raw("")
             };
-
-            vec![Span::styled(text, style), sep]
+            vec![
+                Span::styled(format!(" {} {} ", indicator, label), style),
+                sep,
+            ]
         })
         .collect();
 
-    let para = Paragraph::new(Line::from(spans));
-    frame.render_widget(para, area);
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn render_input(app: &App, frame: &mut Frame, area: Rect) {
@@ -477,29 +624,42 @@ fn render_input(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 fn render_results(app: &App, frame: &mut Frame, area: Rect) {
+    let focused = app.focus == Focus::Results;
+    let border_style = if focused {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let view_label = app.results_view.label();
+    let title = format!(" Results [{}] ", view_label);
+
     let block = Block::default()
-        .title(" Results ")
+        .title(title.as_str())
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(border_style);
 
     match &app.eval_result {
         None => {
-            let para = Paragraph::new(Span::styled(
-                "no pattern",
-                Style::default().fg(Color::DarkGray),
-            ))
-            .block(block);
-            frame.render_widget(para, area);
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    "no pattern",
+                    Style::default().fg(Color::DarkGray),
+                ))
+                .block(block),
+                area,
+            );
         }
         Some(Err(e)) => {
-            let msg = format!("error: {}", e);
-            let para = Paragraph::new(Span::styled(
-                msg,
-                Style::default().fg(Color::Red),
-            ))
-            .block(block)
-            .wrap(Wrap { trim: false });
-            frame.render_widget(para, area);
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    e.to_string(),
+                    Style::default().fg(Color::Red),
+                ))
+                .block(block)
+                .wrap(Wrap { trim: false }),
+                area,
+            );
         }
         Some(Ok(resp)) => {
             render_match_results(app, resp, block, frame, area);
@@ -514,38 +674,75 @@ fn render_match_results(
     frame: &mut Frame,
     area: Rect,
 ) {
+    let preview_active = app.results_sub_focus == ResultsSubFocus::Preview;
+    let matches_active = app.results_sub_focus == ResultsSubFocus::Matches;
     let input_text = app.input.lines().join("\n");
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     if resp.matches.is_empty() {
-        let para = Paragraph::new(Span::styled(
-            "no match",
-            Style::default().fg(Color::DarkGray),
-        ));
-        frame.render_widget(para, inner);
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                "no match",
+                Style::default().fg(Color::DarkGray),
+            )),
+            inner,
+        );
         return;
     }
 
-    // Split inner area: top portion for highlighted input preview,
-    // bottom portion for match breakdown.
-    let split = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
-        .split(inner);
-
-    // Highlighted input preview
-    render_highlighted_input(&input_text, &resp.matches, frame, split[0]);
-
-    // Match breakdown list
-    render_match_list(resp, frame, split[1]);
+    match app.results_view {
+        ResultsView::SplitVertical => {
+            let split = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Percentage(40),
+                    Constraint::Percentage(60),
+                ])
+                .split(inner);
+            render_preview(
+                app,
+                &input_text,
+                &resp.matches,
+                preview_active,
+                frame,
+                split[0],
+            );
+            render_match_list(app, resp, matches_active, frame, split[1]);
+        }
+        ResultsView::SplitHorizontal => {
+            let split = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(50),
+                    Constraint::Percentage(50),
+                ])
+                .split(inner);
+            render_preview(
+                app,
+                &input_text,
+                &resp.matches,
+                preview_active,
+                frame,
+                split[0],
+            );
+            render_match_list(app, resp, matches_active, frame, split[1]);
+        }
+        ResultsView::Preview => {
+            render_preview(app, &input_text, &resp.matches, true, frame, inner);
+        }
+        ResultsView::Matches => {
+            render_match_list(app, resp, true, frame, inner);
+        }
+    }
 }
 
-/// Renders the input text with match spans highlighted.
-/// Byte spans from the engine are mapped back to per-line character ranges.
-fn render_highlighted_input(
+/// Renders the input text with match spans highlighted and a scrollbar.
+fn render_preview(
+    app: &App,
     input: &str,
     matches: &[Match],
+    active: bool,
     frame: &mut Frame,
     area: Rect,
 ) {
@@ -555,8 +752,6 @@ fn render_highlighted_input(
         .add_modifier(Modifier::BOLD);
     let group_style = Style::default().fg(Color::Black).bg(Color::Cyan);
 
-    // Build a flat list of (start, end, style) sorted by start, groups after full matches
-    // so that group highlighting overlays the match highlight.
     let mut highlights: Vec<(usize, usize, Style)> = matches
         .iter()
         .map(|m| (m.span.0, m.span.1, match_style))
@@ -569,7 +764,7 @@ fn render_highlighted_input(
         .collect();
     highlights.sort_by_key(|&(s, _, _)| s);
 
-    let mut lines: Vec<Line> = Vec::new();
+    let mut all_lines: Vec<Line> = Vec::new();
     let mut byte_pos: usize = 0;
 
     for raw_line in input.split('\n') {
@@ -597,23 +792,56 @@ fn render_highlighted_input(
             spans.push(Span::raw(raw_line.to_string()));
         }
 
-        lines.push(Line::from(spans));
-        byte_pos = line_end + 1; // +1 for the '\n'
+        all_lines.push(Line::from(spans));
+        byte_pos = line_end + 1;
     }
 
-    let para = Paragraph::new(lines)
+    let total_lines = all_lines.len();
+    let scroll = app.preview_scroll.min(total_lines.saturating_sub(1));
+
+    // Reserve one column on the right for the scrollbar.
+    let preview_area = Rect {
+        width: area.width.saturating_sub(1),
+        ..area
+    };
+    let scrollbar_area = Rect {
+        x: area.x + area.width.saturating_sub(1),
+        width: 1,
+        ..area
+    };
+
+    let title_style = if active {
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let para = Paragraph::new(all_lines)
         .block(
             Block::default()
-                .title(" Input preview ")
+                .title(Span::styled(" Preview ", title_style))
                 .borders(Borders::TOP),
         )
-        .wrap(Wrap { trim: false });
-    frame.render_widget(para, area);
+        .scroll((scroll as u16, 0));
+    frame.render_widget(para, preview_area);
+
+    let mut scrollbar_state = ScrollbarState::new(total_lines).position(scroll);
+    frame.render_stateful_widget(
+        Scrollbar::new(ScrollbarOrientation::VerticalRight),
+        scrollbar_area,
+        &mut scrollbar_state,
+    );
 }
 
-/// Renders the per-match breakdown list.
-
-fn render_match_list(resp: &EvalResponse, frame: &mut Frame, area: Rect) {
+/// Renders the per-match breakdown list with a scrollbar.
+fn render_match_list(
+    app: &App,
+    resp: &EvalResponse,
+    active: bool,
+    frame: &mut Frame,
+    area: Rect,
+) {
     let count = resp.matches.len();
     let header_style = Style::default()
         .fg(Color::Green)
@@ -626,15 +854,14 @@ fn render_match_list(resp: &EvalResponse, frame: &mut Frame, area: Rect) {
 
     let mut items: Vec<ListItem> = Vec::new();
 
-    // Header
+    // Header row counts as item 0 — offset must account for it.
     items.push(ListItem::new(Line::from(Span::styled(
         format!("{} match{}", count, if count == 1 { "" } else { "es" }),
         header_style,
     ))));
 
     for (i, m) in resp.matches.iter().enumerate() {
-        // Match line
-        let match_line = Line::from(vec![
+        items.push(ListItem::new(Line::from(vec![
             Span::styled(
                 format!("  Match {} ", i + 1),
                 Style::default().fg(Color::Yellow),
@@ -645,10 +872,8 @@ fn render_match_list(resp: &EvalResponse, frame: &mut Frame, area: Rect) {
                 format!("\"{}\"", truncate(&m.full_match, 40)),
                 Style::default().fg(Color::White),
             ),
-        ]);
-        items.push(ListItem::new(match_line));
+        ])));
 
-        // Group lines
         for g in &m.groups {
             let label = match &g.name {
                 Some(n) => format!("    group {} ({}) ", g.index, n),
@@ -678,9 +903,48 @@ fn render_match_list(resp: &EvalResponse, frame: &mut Frame, area: Rect) {
         }
     }
 
-    let list = List::new(items)
-        .block(Block::default().title(" Matches ").borders(Borders::TOP));
-    frame.render_widget(list, area);
+    let total_items = items.len();
+
+    // Reserve one column on the right for the scrollbar.
+    let list_area = Rect {
+        width: area.width.saturating_sub(1),
+        ..area
+    };
+    let scrollbar_area = Rect {
+        x: area.x + area.width.saturating_sub(1),
+        width: 1,
+        ..area
+    };
+
+    // ListState.offset controls which item appears at the top of the visible
+    // area — this is the idiomatic ratatui scroll mechanism for List widgets.
+    let scroll = app.matches_scroll.min(total_items.saturating_sub(1));
+    let mut state = ListState::default();
+    *state.offset_mut() = scroll;
+
+    let title_style = if active {
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    frame.render_stateful_widget(
+        List::new(items).block(
+            Block::default()
+                .title(Span::styled(" Matches ", title_style))
+                .borders(Borders::TOP),
+        ),
+        list_area,
+        &mut state,
+    );
+
+    let mut scrollbar_state = ScrollbarState::new(total_items).position(scroll);
+    frame.render_stateful_widget(
+        Scrollbar::new(ScrollbarOrientation::VerticalRight),
+        scrollbar_area,
+        &mut scrollbar_state,
+    );
 }
 
 fn render_status(app: &App, frame: &mut Frame, area: Rect) {
@@ -695,28 +959,27 @@ fn render_status(app: &App, frame: &mut Frame, area: Rect) {
         None => String::new(),
     };
 
-    // Left: invocation  Right: match count
-    let left = Span::styled(
-        format!(" {} ", invocation),
-        Style::default().fg(Color::DarkGray),
-    );
-    let right = Span::styled(
-        format!(" {} ", match_count),
-        Style::default()
-            .fg(Color::Green)
-            .add_modifier(Modifier::BOLD),
-    );
-
-    let available = area.width as usize;
-    let right_len = match_count.len() + 3;
     let left_str = format!(" {} ", invocation);
-    let padding = available.saturating_sub(left_str.len() + right_len);
+    let right_str = format!(" {} ", match_count);
+    let padding =
+        (area.width as usize).saturating_sub(left_str.len() + right_str.len());
 
-    let line = Line::from(vec![left, Span::raw(" ".repeat(padding)), right]);
+    let line = Line::from(vec![
+        Span::styled(left_str, Style::default().fg(Color::DarkGray)),
+        Span::raw(" ".repeat(padding)),
+        Span::styled(
+            right_str,
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
 
-    let para = Paragraph::new(line)
-        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
-    frame.render_widget(para, area);
+    frame.render_widget(
+        Paragraph::new(line)
+            .style(Style::default().bg(Color::DarkGray).fg(Color::White)),
+        area,
+    );
 }
 
 fn render_hint(app: &App, frame: &mut Frame, area: Rect) {
@@ -736,21 +999,23 @@ fn render_hint(app: &App, frame: &mut Frame, area: Rect) {
     };
 
     let hints = Span::styled(
-        "  Esc: nav mode  │  ctrl+p: pattern  │  ctrl+t: input  │  Tab: cycle  │  f: toggle fancy  │  ?: help  │  q: quit",
+        "  Esc: nav  │  ctrl+p: pattern  │  ctrl+t: input  │  Tab: cycle  │  v: view  │  f: fancy  │  ?: help  │  q: quit",
         Style::default().fg(Color::DarkGray),
     );
 
-    let line = Line::from(vec![mode_indicator, hints]);
-    frame.render_widget(Paragraph::new(line), area);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![mode_indicator, hints])),
+        area,
+    );
 }
 
 fn render_help_overlay(frame: &mut Frame, area: Rect) {
     use ratatui::widgets::Clear;
 
-    let width = (area.width).min(60);
-    let height = 22u16;
-    let x = (area.width.saturating_sub(width)) / 2;
-    let y = (area.height.saturating_sub(height)) / 2;
+    let width = area.width.min(62);
+    let height = 26u16;
+    let x = area.width.saturating_sub(width) / 2;
+    let y = area.height.saturating_sub(height) / 2;
     let popup_area = Rect::new(x, y, width, height);
 
     frame.render_widget(Clear, popup_area);
@@ -775,10 +1040,18 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         )),
         Line::raw("   q           Quit"),
         Line::raw("   ?           Toggle this help"),
-        Line::raw("   Tab         Cycle focus"),
-        Line::raw("   Shift+Tab   Cycle focus (reverse)"),
+        Line::raw("   Tab         Cycle focus forward"),
+        Line::raw("   Shift+Tab   Cycle focus backward"),
         Line::raw("   f           Toggle fancy-regex mode"),
+        Line::raw("   v           Cycle results view"),
         Line::raw("   Enter       Re-enter insert mode"),
+        Line::raw(""),
+        Line::from(Span::styled(
+            " When Results pane is focused:",
+            Style::default().fg(Color::Green),
+        )),
+        Line::raw("   ↑  ↓        Scroll active sub-pane"),
+        Line::raw("   ←  →        Switch active sub-pane (split views)"),
         Line::raw(""),
         Line::from(Span::styled(
             " When Flags row is focused:",
@@ -788,18 +1061,26 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         Line::raw("   Space       Toggle flag"),
         Line::raw(""),
         Line::from(Span::styled(
+            " Results views (v to cycle):",
+            Style::default().fg(Color::Magenta),
+        )),
+        Line::raw("   split-v  split-h  preview  matches"),
+        Line::raw(""),
+        Line::from(Span::styled(
             " Press ? to close",
             Style::default().fg(Color::DarkGray),
         )),
     ];
 
-    let block = Block::default()
-        .title(" Help ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
-
-    let para = Paragraph::new(help_text).block(block);
-    frame.render_widget(para, popup_area);
+    frame.render_widget(
+        Paragraph::new(help_text).block(
+            Block::default()
+                .title(" Help ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow)),
+        ),
+        popup_area,
+    );
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
