@@ -33,7 +33,7 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 
 use rgx::cli::{Cli, Command};
 use rgx::engine::native::RustEngine;
-use rgx::tui::{App, handle_key, render};
+use rgx::tui::app::{App, handle_key, render};
 
 /// Restores the terminal to its original state when dropped.
 ///

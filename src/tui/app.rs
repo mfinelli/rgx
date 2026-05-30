@@ -1,3 +1,20 @@
+/* rgx: command line regexp tester
+ * Copyright 2026 Mario Finelli
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyModifiers};
@@ -20,8 +37,6 @@ use crate::engine::{
     },
     types::{EngineError, EvalMode, EvalRequest, EvalResponse, Flags, Match},
 };
-
-// ─── Mode, Focus, Results View ───────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppMode {
@@ -80,8 +95,6 @@ pub enum ResultsSubFocus {
     Preview,
     Matches,
 }
-
-// ─── App State ───────────────────────────────────────────────────────────────
 
 pub struct App<'a> {
     pub mode: AppMode,
@@ -333,14 +346,11 @@ impl<'a> App<'a> {
     }
 }
 
-// ─── Event Handling ───────────────────────────────────────────────────────────
-
 /// Process one key event. Returns `true` if the application should quit.
+/// Always-available ctrl shortcuts (work inside text fields)
 pub fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
     use KeyCode::*;
     use KeyModifiers as KM;
-
-    // ── Always-available ctrl shortcuts (work inside text fields) ──
 
     // ctrl+z — undo within the active text field
     if key.modifiers == KM::CONTROL && key.code == Char('z') {
@@ -493,8 +503,6 @@ fn handle_nav(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
     }
     false
 }
-
-// ─── Rendering ────────────────────────────────────────────────────────────────
 
 pub fn render(app: &App, frame: &mut Frame) {
     let area = frame.area();
@@ -1065,8 +1073,6 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         popup_area,
     );
 }
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 fn truncate(s: &str, max_chars: usize) -> String {
     let mut chars = s.chars();
