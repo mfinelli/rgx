@@ -136,6 +136,7 @@ pub struct App<'a> {
 }
 
 impl<'a> App<'a> {
+    /// Create a new `App` with default state, ready for the event loop.
     pub fn new() -> Self {
         let mut pattern = TextArea::default();
         pattern.set_block(
@@ -189,6 +190,8 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Run the engine against the current pattern and input, storing the result.
+    /// Resets scroll offsets when results change.
     fn evaluate(&mut self, engine: &RustEngine) {
         let pattern = self.pattern.lines().join("\n");
         let input_text = self.input.lines().join("\n");
@@ -374,7 +377,6 @@ pub fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
     use KeyCode::*;
     use KeyModifiers as KM;
 
-
     // ctrl+p — jump to pattern field
     if key.modifiers == KM::CONTROL && key.code == Char('p') {
         app.jump_to(Focus::Pattern);
@@ -393,6 +395,9 @@ pub fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
     }
 }
 
+/// Handle a key event while in Insert mode.
+/// Returns `true` if the application should quit (always `false` here —
+/// quitting is only triggered from Nav mode).
 fn handle_insert(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
     use KeyCode::*;
 
@@ -425,6 +430,8 @@ fn handle_insert(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
     false
 }
 
+/// Handle a key event while in Nav mode.
+/// Returns `true` if the application should quit (e.g. user pressed `q`).
 fn handle_nav(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
     use KeyCode::*;
     use KeyModifiers as KM;
@@ -519,6 +526,9 @@ fn handle_nav(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
     false
 }
 
+/// Render the full application UI into `frame`.
+/// Dispatches to per-pane render functions. Shows a size warning if the
+/// terminal is too small to render the layout meaningfully.
 pub fn render(app: &App, frame: &mut Frame) {
     let area = frame.area();
 
@@ -559,6 +569,9 @@ pub fn render(app: &App, frame: &mut Frame) {
     }
 }
 
+/// Render the engine tab bar at the top of the layout.
+/// Currently shows only the active Rust engine variant; will become a
+/// full tab bar once multiple engines are implemented.
 fn render_engine_bar(app: &App, frame: &mut Frame, area: Rect) {
     let engine_name = if app.use_fancy {
         " [ Rust · fancy-regex ] "
@@ -576,10 +589,14 @@ fn render_engine_bar(app: &App, frame: &mut Frame, area: Rect) {
     );
 }
 
+/// Render the pattern input field.
 fn render_pattern(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(&app.pattern, area);
 }
 
+/// Render the variant selector and flag toggles row.
+/// The variant selector sits at the left; flags follow to the right.
+/// Both are navigable with arrow keys when the flags row has focus.
 fn render_flags(app: &App, frame: &mut Frame, area: Rect) {
     let flags = &app.flags;
     let focus = &app.flag_row_focus;
@@ -633,10 +650,14 @@ fn render_flags(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
+/// Render the test input field.
 fn render_input(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(&app.input, area);
 }
 
+/// Render the results pane, dispatching to the appropriate layout based
+/// on `app.results_view`. Shows a placeholder when there is no pattern,
+/// an error message on parse failure, or match results on success.
 fn render_results(app: &App, frame: &mut Frame, area: Rect) {
     let focused = app.focus == Focus::Results;
     let border_style = if focused {
@@ -681,6 +702,8 @@ fn render_results(app: &App, frame: &mut Frame, area: Rect) {
     }
 }
 
+/// Render match results inside the results block, splitting the inner area
+/// into preview and match-list sub-panes according to `app.results_view`.
 fn render_match_results(
     app: &App,
     resp: &EvalResponse,
@@ -989,6 +1012,8 @@ fn render_match_list(
     );
 }
 
+/// Render the status line showing the rendered engine invocation on the
+/// left and the match count on the right.
 fn render_status(app: &App, frame: &mut Frame, area: Rect) {
     let invocation = app.status_invocation();
     let match_count = match &app.eval_result {
@@ -1023,6 +1048,8 @@ fn render_status(app: &App, frame: &mut Frame, area: Rect) {
     );
 }
 
+/// Render the hint bar at the bottom showing the current mode indicator
+/// and a summary of the most common keybinds.
 fn render_hint(app: &App, frame: &mut Frame, area: Rect) {
     let mode_indicator = match app.mode {
         AppMode::Insert => Span::styled(
@@ -1050,6 +1077,8 @@ fn render_hint(app: &App, frame: &mut Frame, area: Rect) {
     );
 }
 
+/// Render the keybind reference overlay, centered over the full terminal area.
+/// Shown when `app.show_help` is true; dismissed with `?` or `Esc`.
 fn render_help_overlay(frame: &mut Frame, area: Rect) {
     use ratatui::widgets::Clear;
 
@@ -1123,6 +1152,8 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
     );
 }
 
+/// Truncate `s` to at most `max_chars` characters, appending `…` if truncated.
+/// Counts Unicode scalar values (chars), not bytes.
 fn truncate(s: &str, max_chars: usize) -> String {
     let mut chars = s.chars();
     let collected: String = chars.by_ref().take(max_chars).collect();
