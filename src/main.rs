@@ -18,7 +18,7 @@
 use std::io;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use clap::Parser;
 use clap_complete::generate;
 use crossterm::{
