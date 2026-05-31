@@ -39,8 +39,8 @@ use rgx::tui::app::{App, handle_key, render};
 ///
 /// This runs on all scope exits including panics, ensuring the terminal is
 /// never left in raw mode. Errors are silently swallowed since Drop cannot
-/// return a Result — the explicit cleanup in main() handles error propagation
-/// on the normal path.
+/// return a Result (the explicit cleanup in main() handles error propagation
+/// on the normal path).
 struct TerminalGuard;
 
 impl Drop for TerminalGuard {
@@ -73,7 +73,7 @@ fn main() -> Result<()> {
 
     let result = run(&mut terminal);
 
-    // Normal path cleanup — errors captured and returned.
+    // Normal path cleanup: errors captured and returned
     let cleanup: Result<()> = (|| {
         disable_raw_mode()?;
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;

@@ -56,7 +56,7 @@ pub struct Group {
     /// None when the group did not participate in the match (optional group).
     pub value: Option<String>,
     pub span: Option<(usize, usize)>,
-    /// False for optional groups that didn't match — shown explicitly in UI.
+    /// False for optional groups that didn't match (shown explicitly in UI).
     pub matched: bool,
 }
 
@@ -73,7 +73,7 @@ pub struct Match {
 #[derive(Debug, Clone, Default)]
 pub struct EvalResponse {
     pub matches: Vec<Match>,
-    /// Populated in Replace mode — the full transformed input string.
+    /// Populated in Replace mode: the full transformed input string.
     pub replaced: Option<String>,
 }
 
@@ -94,6 +94,7 @@ pub struct EngineError {
 }
 
 impl std::fmt::Display for EngineError {
+    /// Format the error for display, appending position if known.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(pos) = self.position {
             write!(f, "{} (at position {})", self.message, pos)

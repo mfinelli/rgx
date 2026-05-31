@@ -175,7 +175,7 @@ impl<'a> App<'a> {
         }
     }
 
-    /// Called on every text edit — resets the debounce timer.
+    /// Called on every text edit (resets the debounce timer).
     pub fn mark_dirty(&mut self) {
         self.last_edit = Some(Instant::now());
     }
@@ -254,10 +254,10 @@ impl<'a> App<'a> {
         self.update_borders();
     }
 
-    /// Cycle focus forward: Pattern → Input → Flags → Results → Pattern
+    /// Cycle focus forward: Pattern -> Input -> Flags -> Results -> Pattern
     ///
     /// Order matches the visual top-to-bottom layout.
-    /// Does not enter Insert mode — Tab cycling should never capture input.
+    /// Does not enter Insert mode (Tab cycling should never capture input).
     /// Insert mode activates only when the user presses Enter or types a char.
     fn cycle_focus(&mut self) {
         self.focus = match self.focus {
@@ -269,7 +269,7 @@ impl<'a> App<'a> {
         self.update_borders();
     }
 
-    /// Cycle focus backward: Pattern → Results → Flags → Input → Pattern
+    /// Cycle focus backward: Pattern -> Results -> Flags -> Input -> Pattern
     fn cycle_focus_back(&mut self) {
         self.focus = match self.focus {
             Focus::Pattern => Focus::Results,
@@ -372,18 +372,18 @@ impl<'a> App<'a> {
 }
 
 /// Process one key event. Returns `true` if the application should quit.
-/// Always-available ctrl shortcuts (work inside text fields)
 pub fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
     use KeyCode::*;
     use KeyModifiers as KM;
 
-    // ctrl+p — jump to pattern field
+    // Always-available ctrl shortcuts (work inside text fields)
+    // ctrl+p: jump to pattern field
     if key.modifiers == KM::CONTROL && key.code == Char('p') {
         app.jump_to(Focus::Pattern);
         return false;
     }
 
-    // ctrl+t — jump to test input field
+    // ctrl+t: jump to test input field
     if key.modifiers == KM::CONTROL && key.code == Char('t') {
         app.jump_to(Focus::Input);
         return false;
@@ -396,7 +396,7 @@ pub fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
 }
 
 /// Handle a key event while in Insert mode.
-/// Returns `true` if the application should quit (always `false` here —
+/// Returns `true` if the application should quit (always `false` here;
 /// quitting is only triggered from Nav mode).
 fn handle_insert(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
     use KeyCode::*;
@@ -452,13 +452,13 @@ fn handle_nav(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
             app.results_view = app.results_view.next();
         }
 
-        // Tab — cycle focus forward
+        // Tab: cycle focus forward
         (Tab, KM::NONE) => app.cycle_focus(),
 
-        // Shift+Tab — cycle focus backward
+        // Shift+Tab: cycle focus backward
         (BackTab, _) => app.cycle_focus_back(),
 
-        // Arrow keys — scroll results when results pane is focused.
+        // Arrow keys: scroll results when results pane is focused.
         // Up/Down on text panes are handled by the editing-intent arm below.
         (Up, KM::NONE) if app.focus == Focus::Results => app.scroll_up(),
         (Down, KM::NONE) if app.focus == Focus::Results => app.scroll_down(),
@@ -486,7 +486,7 @@ fn handle_nav(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
             };
         }
 
-        // Space/Enter — activate focused flag row item
+        // Space/Enter: activate focused flag row item
         (Char(' '), KM::NONE) if app.focus == Focus::Flags => {
             app.activate_flag_row();
         }
@@ -506,8 +506,9 @@ fn handle_nav(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
         {
             app.mode = AppMode::Insert;
             app.update_borders();
-            // Forward the key so it takes effect immediately — the cursor
-            // moves or character is deleted without needing a second keypress.
+            // Forward the key so it takes effect immediately (the cursor
+            // moves or character is deleted without needing a second
+            // keypress).
             match app.focus {
                 Focus::Pattern => {
                     app.pattern.input(key);
@@ -534,7 +535,7 @@ pub fn render(app: &App, frame: &mut Frame) {
 
     if area.width < 40 || area.height < 12 {
         frame.render_widget(
-            Paragraph::new("terminal too small — resize to continue")
+            Paragraph::new("terminal too small: resize to continue")
                 .style(Style::default().fg(Color::Red)),
             area,
         );
@@ -776,7 +777,7 @@ fn render_match_results(
 
 /// Renders the input text with match spans highlighted and a scrollbar.
 ///
-/// Uses a per-byte style map so overlapping spans are handled correctly —
+/// Uses a per-byte style map so overlapping spans are handled correctly:
 /// group highlights take precedence over full-match highlights where they
 /// overlap, avoiding duplicate text from cursor rewinding.
 fn render_preview(
@@ -919,7 +920,7 @@ fn render_match_list(
 
     let mut items: Vec<ListItem> = Vec::new();
 
-    // Header row counts as item 0 — offset must account for it.
+    // Header row counts as item 0 (offset must account for it).
     items.push(ListItem::new(Line::from(Span::styled(
         format!("{} match{}", count, if count == 1 { "" } else { "es" }),
         header_style,
@@ -982,7 +983,7 @@ fn render_match_list(
     };
 
     // ListState.offset controls which item appears at the top of the visible
-    // area — this is the idiomatic ratatui scroll mechanism for List widgets.
+    // area (this is the idiomatic ratatui scroll mechanism for List widgets).
     let scroll = app.matches_scroll.min(total_items.saturating_sub(1));
     let mut state = ListState::default();
     *state.offset_mut() = scroll;
@@ -1195,7 +1196,8 @@ mod tests {
 
     #[test]
     fn truncate_multibyte_chars_counted_as_one() {
-        // "héllo" is 5 chars but 6 bytes — truncate should count chars not bytes
+        // "héllo" is 5 chars but 6 bytes (truncate should count chars not
+        // bytes)
         assert_eq!(truncate("héllo", 5), "héllo");
         assert_eq!(truncate("héllo world", 5), "héllo…");
     }
