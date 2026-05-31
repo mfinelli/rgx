@@ -32,6 +32,7 @@ use crossterm::{
 use ratatui::{Terminal, backend::CrosstermBackend};
 
 use rgx::cli::{Cli, Command};
+use rgx::config::Config;
 use rgx::engine::native::RustEngine;
 use rgx::tui::app::{App, handle_key, render};
 
@@ -46,7 +47,7 @@ struct TerminalGuard;
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen,);
+        let _ = execute!(io::stdout(), LeaveAlternateScreen);
     }
 }
 
@@ -61,6 +62,9 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    let config = Config::load(cli.config.as_deref())
+        .context("failed to load configuration")?;
+
     enable_raw_mode()?;
     execute!(io::stdout(), EnterAlternateScreen)?;
 
@@ -71,7 +75,7 @@ fn main() -> Result<()> {
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run(&mut terminal);
+    let result = run(&mut terminal, config);
 
     // Normal path cleanup: errors captured and returned
     let cleanup: Result<()> = (|| {
@@ -97,9 +101,17 @@ fn main() -> Result<()> {
 /// Owns the terminal for its entire duration. Returns `Ok(())` when the user
 /// exits normally (e.g. presses `q`). Any error from rendering or event
 /// reading is propagated up to `main()` for cleanup and reporting.
-fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
+fn run(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    config: Config,
+) -> Result<()> {
     let engine = RustEngine::new();
-    let mut app = App::new();
+    let mut app = App::new(
+        config.nerd_fonts,
+        config.default_results_view.to_results_view(),
+        config.debounce_ms,
+        config.fancy_regex_default,
+    );
 
     // Force an initial render
     terminal.draw(|f| render(&app, f))?;

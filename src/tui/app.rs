@@ -131,19 +131,27 @@ pub struct App<'a> {
     /// Which sub-pane is active in split views (determines scroll target).
     pub results_sub_focus: ResultsSubFocus,
 
+    /// Show Nerd Font icons in the engine tab bar.
+    pub nerd_fonts: bool,
+
     /// Whether to show the keybind help overlay.
     pub show_help: bool,
 }
 
 impl<'a> Default for App<'a> {
     fn default() -> Self {
-        Self::new()
+        Self::new(false, ResultsView::SplitVertical, 150, false)
     }
 }
 
 impl<'a> App<'a> {
-    /// Create a new `App` with default state, ready for the event loop.
-    pub fn new() -> Self {
+    /// Create a new `App` with initial state derived from the loaded config.
+    pub fn new(
+        nerd_fonts: bool,
+        results_view: ResultsView,
+        debounce_ms: u64,
+        use_fancy: bool,
+    ) -> Self {
         let mut pattern = TextArea::default();
         pattern.set_block(
             Block::default()
@@ -169,14 +177,15 @@ impl<'a> App<'a> {
                 ..Default::default()
             },
             flag_row_focus: FlagRowFocus::Variant,
-            use_fancy: false,
-            results_view: ResultsView::SplitVertical,
+            use_fancy,
+            results_view,
             matches_scroll: 0,
             preview_scroll: 0,
             eval_result: None,
             last_edit: None,
-            debounce_ms: 150,
+            debounce_ms,
             results_sub_focus: ResultsSubFocus::Matches,
+            nerd_fonts,
             show_help: false,
         }
     }
@@ -580,11 +589,15 @@ pub fn render(app: &App, frame: &mut Frame) {
 /// Currently shows only the active Rust engine variant; will become a
 /// full tab bar once multiple engines are implemented.
 fn render_engine_bar(app: &App, frame: &mut Frame, area: Rect) {
-    let engine_name = if app.use_fancy {
-        " [ Rust · fancy-regex ] "
+    // \u{e7a8} is the Nerd Fonts devicons codepoint for Rust
+    let logo = if app.nerd_fonts { "\u{e7a8} " } else { "" };
+    let variant = if app.use_fancy {
+        "fancy-regex"
     } else {
-        " [ Rust · regex ] "
+        "regex"
     };
+    let engine_name = format!(" [ {}Rust · {} ] ", logo, variant);
+
     frame.render_widget(
         Paragraph::new(Span::styled(
             engine_name,
