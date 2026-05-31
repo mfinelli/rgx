@@ -138,7 +138,7 @@ Below a minimum usable size, show a single-line message: `terminal too small —
 
 ### Nerd Fonts
 
-Enabled via env var `RGX_NERD_FONTS=1` or config key `nerd_fonts = true`. When enabled, engine tabs show language logos as Nerd Font codepoints. Default off.
+Enabled via config key `nerd_fonts = true`. When enabled, engine tabs show language logos as Nerd Font codepoints. Default off.
 
 ### NO_COLOR
 
@@ -701,7 +701,7 @@ File location: `~/.config/rgx/config.toml` (XDG config dir).
 
 ```toml
 # UI
-nerd_fonts = false           # or set RGX_NERD_FONTS=1 env var
+nerd_fonts = false
 default_language = "rust"    # which tab opens by default
 mouse = false                # enable mouse support
 default_results_view = "split_vertical"  # "split_vertical" | "split_horizontal" | "preview" | "matches"

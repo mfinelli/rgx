@@ -112,6 +112,26 @@ RegexBuilder::new(r"(\w+)").case_insensitive(true).multi_line(true).build()
 fancy_regex::Regex::new(r"(?im)(\w+)")
 ```
 
+## Configuration
+
+`rgx` reads `~/.config/rgx/config.toml` on startup (XDG config dir). A missing
+file is not an error — all options have defaults. Specify a custom path with
+`--config`.
+
+```toml
+# UI
+nerd_fonts = false               # show Nerd Font icons in the engine tab bar
+default_results_view = "split_vertical"  # split_vertical | split_horizontal | preview | matches
+
+# Evaluation
+debounce_ms = 150                # ms to wait after last keystroke before evaluating
+
+# Rust engine
+fancy_regex_default = false      # start on fancy-regex variant instead of regex
+```
+
+Unknown keys are rejected with an error message pointing to the offending line.
+
 ## What's coming
 
 See [DESIGN.md](DESIGN.md) for the full feature specification and

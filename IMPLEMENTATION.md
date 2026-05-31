@@ -240,11 +240,14 @@ Each follows the same pattern as Python/Node. Wire into the tab bar.
 
 ## Phase 13 — Configuration
 
-**32. Configuration file**
-- Full `~/.config/rgx/config.toml` support
-- All keys from DESIGN.md Configuration section
-- Per-runtime path overrides and enable/disable
-- Config loaded at startup, validated with helpful error messages for unknown keys
+**32. Configuration file** *(partially done)*
+- `src/config.rs` with `Config` struct, TOML parsing, XDG path resolution ✓
+- Implemented keys: `nerd_fonts`, `default_results_view`, `debounce_ms`, `fancy_regex_default` ✓
+- Config loaded at startup before TUI, passed into `App::new()` ✓
+- Unknown keys rejected with error message ✓
+- Remaining keys deferred until their features are implemented:
+  `on_open`, `history_cleanup_days`, `show_probe_splash`, `large_file_warn_mb`,
+  `mouse`, and all `[runtimes.*]` sections
 
 ---
 
@@ -255,7 +258,7 @@ Each follows the same pattern as Python/Node. Wire into the tab bar.
 - Verify all color usage respects the flag
 
 **34. Nerd fonts**
-- `RGX_NERD_FONTS=1` env var and `nerd_fonts = true` config key
+- `nerd_fonts = true` config key
 - Engine tab logos via Nerd Font codepoints
 
 **35. Mouse support**
