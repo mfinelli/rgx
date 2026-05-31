@@ -135,6 +135,12 @@ pub struct App<'a> {
     pub show_help: bool,
 }
 
+impl<'a> Default for App<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<'a> App<'a> {
     /// Create a new `App` with default state, ready for the event loop.
     pub fn new() -> Self {
@@ -182,11 +188,11 @@ impl<'a> App<'a> {
 
     /// Evaluate if the debounce period has elapsed since the last edit.
     pub fn maybe_evaluate(&mut self, engine: &RustEngine) {
-        if let Some(last) = self.last_edit {
-            if last.elapsed() >= Duration::from_millis(self.debounce_ms) {
-                self.evaluate(engine);
-                self.last_edit = None;
-            }
+        if let Some(last) = self.last_edit
+            && last.elapsed() >= Duration::from_millis(self.debounce_ms)
+        {
+            self.evaluate(engine);
+            self.last_edit = None;
         }
     }
 

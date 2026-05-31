@@ -109,12 +109,11 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
         app.maybe_evaluate(&engine);
 
         // Poll for events with a short timeout so debounce fires promptly
-        if event::poll(Duration::from_millis(30))? {
-            if let Event::Key(key) = event::read()? {
-                if handle_key(&mut app, key) {
-                    break;
-                }
-            }
+        if event::poll(Duration::from_millis(30))?
+            && let Event::Key(key) = event::read()?
+            && handle_key(&mut app, key)
+        {
+            break;
         }
 
         terminal.draw(|f| render(&app, f))?;

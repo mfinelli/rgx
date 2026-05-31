@@ -20,6 +20,7 @@ use regex::RegexBuilder;
 
 /// The native Rust regex engine. Stateless (all configuration is carried
 /// in `EvalRequest`) so the same instance can be shared across the app.
+#[derive(Default)]
 pub struct RustEngine;
 
 impl RustEngine {
