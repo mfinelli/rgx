@@ -174,6 +174,9 @@ Rust matches. Everything else builds on this foundation.
 - Create new session with `forked_from_id` + `forked_at_seq` (schema ready)
 - Ancestry reconstruction for display
 - Fork indicator in UI
+- `on_undo_edit` config key: `"fork"` (default) preserves original session;
+  `"truncate"` keeps current behavior (discards forward history)
+  — only the conditional in `SessionManager::push()` differs between the two
 
 ---
 

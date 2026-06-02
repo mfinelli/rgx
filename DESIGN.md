@@ -571,6 +571,16 @@ Toggleable via `h` in the nav layer. Filter bar at top:
 [ All ] [ Named ] [ This language ] [ Recent ] [ Search... ]
 ```
 
+Each session entry shows a language prefix before the session name. When nerd
+fonts are enabled this is the engine's icon codepoint; otherwise it is the
+language name in brackets:
+
+```
+# nerd fonts on              # nerd fonts off
+  My email validator         [rust]  My email validator
+  (unnamed)                  [python]  (unnamed)
+```
+
 Search uses FTS5 full-text search over session name and pattern.
 
 ### Cleanup
@@ -626,7 +636,20 @@ Toggleable via `w` in the nav layer. Searchable. ~40-60 items across categories:
 - POSIX classes: `[:alpha:] [:digit:] [:space:] [:alnum:]` (grep/sed)
 - Unicode properties: `\p{L} \p{N}` (Rust/Python `regex`/JS `/u`)
 
-**Per-engine availability**: items unavailable on the current tab are shown greyed with a label indicating where they *are* supported. Items are never omitted — seeing that `(?<=...)` lookbehind is greyed on the Rust tab with "available in Python, JS, PHP, Ruby" is more useful than not seeing it at all.
+**Default view**: only items supported by the current engine are shown.
+This keeps the panel focused and useful for day-to-day work.
+
+**Toggle all**: a keybind within the panel (e.g. `a`) reveals unsupported items
+greyed out with a label showing which engines do support them. The panel title
+reflects the current mode:
+
+```
+ Reference [rust · regex]          ← default: supported items only
+ Reference [rust · regex · all]    ← all items, unsupported greyed
+```
+
+This makes the common case clean while keeping the cross-engine comparison
+available on demand for users who want to understand engine differences.
 
 ### Flag Reference
 
