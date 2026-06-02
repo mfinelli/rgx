@@ -270,22 +270,22 @@ impl<'a> App<'a> {
 
     /// Load a `SessionState` into the live TextArea widgets and flags.
     ///
-    /// Used by undo, redo, and session resume.
+    /// Used by undo, redo, and session resume. `None` fields (SQL NULL) are
+    /// treated as empty string when setting TextArea content.
     pub fn load_state(&mut self, state: &SessionState) {
-        self.pattern = make_textarea(
-            state.pattern.lines().map(|l| l.to_string()).collect(),
-        );
-        self.input =
-            make_textarea(state.input.lines().map(|l| l.to_string()).collect());
-        self.replacement = make_textarea(
-            state.replacement.lines().map(|l| l.to_string()).collect(),
-        );
+        let to_lines = |s: Option<&str>| {
+            s.unwrap_or("").lines().map(|l| l.to_string()).collect()
+        };
+        self.pattern = make_textarea(to_lines(state.pattern.as_deref()));
+        self.input = make_textarea(to_lines(state.input.as_deref()));
+        self.replacement =
+            make_textarea(to_lines(state.replacement.as_deref()));
         self.eval_mode = if state.mode == "replace" {
             EvalMode::Replace
         } else {
             EvalMode::Match
         };
-        self.flags = deserialize_flags(&state.options);
+        self.flags = deserialize_flags(state.options.as_deref().unwrap_or(""));
         self.matches_scroll = 0;
         self.preview_scroll = 0;
         self.update_borders();
@@ -295,13 +295,15 @@ impl<'a> App<'a> {
     /// Capture current TextArea and flag state as a `SessionState`.
     ///
     /// Used to push a new state onto the undo stack after evaluation.
+    /// Empty strings are converted to `None` via `none_if_empty` (the schema
+    /// rejects empty strings) and uses NULL to mean "absent".
     pub fn capture_state(&self) -> SessionState {
         SessionState {
             seq: 0, // assigned by Db::push_state
-            pattern: self.pattern.lines().join("\n"),
-            options: serialize_flags(&self.flags),
-            input: self.input.lines().join("\n"),
-            replacement: self.replacement.lines().join("\n"),
+            pattern: none_if_empty(self.pattern.lines().join("\n")),
+            options: none_if_empty(serialize_flags(&self.flags)),
+            input: none_if_empty(self.input.lines().join("\n")),
+            replacement: none_if_empty(self.replacement.lines().join("\n")),
             mode: if self.eval_mode == EvalMode::Replace {
                 "replace".to_string()
             } else {
@@ -1471,6 +1473,14 @@ fn truncate(s: &str, max_chars: usize) -> String {
     } else {
         collected
     }
+}
+
+/// Convert an empty string to `None`, preserving non-empty strings as `Some`.
+///
+/// Used when capturing app state for DB storage (the schema rejects empty
+/// strings) and uses NULL to represent absent values.
+pub(crate) fn none_if_empty(s: String) -> Option<String> {
+    if s.is_empty() { None } else { Some(s) }
 }
 
 /// Create a `TextArea` with the given lines and no special styling.

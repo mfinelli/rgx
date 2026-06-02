@@ -59,18 +59,41 @@ pub struct Session {
 }
 
 /// A persisted state snapshot within a session.
-#[derive(Debug, Clone, Default)]
+///
+/// Text fields that may be absent use `Option<String>` (`None` is stored as
+/// SQL NULL), and empty strings are rejected by the schema check constraints.
+/// Use `none_if_empty()` when capturing from app state and
+/// `.as_deref().unwrap_or("")` when loading back into app state.
+#[derive(Debug, Clone)]
 pub struct SessionState {
     pub seq: i64,
-    pub pattern: String,
-    /// Comma-separated active flag names, e.g. `"case_insensitive,global"`.
-    pub options: String,
-    pub input: String,
-    pub replacement: String,
+    /// `None` when the session has no pattern yet.
+    pub pattern: Option<String>,
+    /// `None` when no flags are active. Comma-separated flag names otherwise.
+    pub options: Option<String>,
+    /// `None` when the test input is empty.
+    pub input: Option<String>,
+    /// `None` when the replacement field is empty.
+    pub replacement: Option<String>,
     /// `"match"` or `"replace"`.
     pub mode: String,
     pub source_file: Option<String>,
     pub file_dirty: bool,
+}
+
+impl Default for SessionState {
+    fn default() -> Self {
+        Self {
+            seq: 0,
+            pattern: None,
+            options: None,
+            input: None,
+            replacement: None,
+            mode: "match".to_string(),
+            source_file: None,
+            file_dirty: false,
+        }
+    }
 }
 
 /// Handle to the SQLite database. All mutations go through this type.
@@ -203,9 +226,10 @@ impl Db {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 session_id, next_seq,
-                state.pattern, state.options, state.input,
-                state.replacement, state.mode,
-                state.source_file, state.file_dirty as i64,
+                state.pattern.as_deref(), state.options.as_deref(),
+                state.input.as_deref(),   state.replacement.as_deref(),
+                state.mode,
+                state.source_file.as_deref(), state.file_dirty as i64,
             ],
         ).context("failed to push session state")?;
 
@@ -233,6 +257,8 @@ impl Db {
             source_file: row.get(6).unwrap(),
             file_dirty: row.get::<_, i64>(7).unwrap() != 0,
         }))
+        // Note: rusqlite maps SQL NULL to None for Option<String> fields
+        // automatically, so no special handling is needed here.
     }
 
     /// Return the maximum seq for a session (the head of the undo stack).
@@ -376,15 +402,16 @@ mod tests {
             let db = Db::open(&path).unwrap();
             let sid = db.create_session("rust", None).unwrap();
             let state = SessionState {
-                pattern: "hello".to_string(),
-                input: "hello world".to_string(),
+                pattern: Some("hello".to_string()),
+                input: Some("hello world".to_string()),
+                mode: "match".to_string(),
                 ..Default::default()
             };
             let seq = db.push_state(sid, 0, &state).unwrap();
             assert_eq!(seq, 1);
             let loaded = db.get_state(sid, seq).unwrap().unwrap();
-            assert_eq!(loaded.pattern, "hello");
-            assert_eq!(loaded.input, "hello world");
+            assert_eq!(loaded.pattern.as_deref(), Some("hello"));
+            assert_eq!(loaded.input.as_deref(), Some("hello world"));
         }
         cleanup_temp_db(&path);
     }
@@ -396,7 +423,8 @@ mod tests {
             let db = Db::open(&path).unwrap();
             let sid = db.create_session("rust", None).unwrap();
             let s = |p: &str| SessionState {
-                pattern: p.to_string(),
+                pattern: Some(p.to_string()),
+                mode: "match".to_string(),
                 ..Default::default()
             };
             db.push_state(sid, 0, &s("a")).unwrap(); // seq 1
@@ -406,7 +434,7 @@ mod tests {
             db.push_state(sid, 1, &s("d")).unwrap();
             assert!(db.get_state(sid, 3).unwrap().is_none());
             let loaded = db.get_state(sid, 2).unwrap().unwrap();
-            assert_eq!(loaded.pattern, "d");
+            assert_eq!(loaded.pattern.as_deref(), Some("d"));
         }
         cleanup_temp_db(&path);
     }
