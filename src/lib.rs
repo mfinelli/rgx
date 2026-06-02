@@ -17,5 +17,7 @@
 
 pub mod cli;
 pub mod config;
+pub mod db;
 pub mod engine;
+pub mod session;
 pub mod tui;

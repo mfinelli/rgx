@@ -32,6 +32,9 @@ pub struct Config {
     /// Show Nerd Font icons in the engine tab bar.
     pub nerd_fonts: bool,
 
+    /// What to do with sessions on startup.
+    pub on_open: OnOpen,
+
     /// Default results pane layout on startup.
     pub default_results_view: ResultsViewConfig,
 
@@ -46,11 +49,25 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             nerd_fonts: false,
+            on_open: OnOpen::default(),
             default_results_view: ResultsViewConfig::default(),
             debounce_ms: 150,
             fancy_regex_default: false,
         }
     }
+}
+
+/// The `on_open` config value: what to do with sessions on startup.
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OnOpen {
+    /// Always resume the last active session.
+    Continue,
+    /// Always start a fresh session.
+    New,
+    /// Prompt the user to choose (default).
+    #[default]
+    Ask,
 }
 
 /// The `default_results_view` config value.

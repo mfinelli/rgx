@@ -32,8 +32,10 @@ use crossterm::{
 use ratatui::{Terminal, backend::CrosstermBackend};
 
 use rgx::cli::{Cli, Command};
-use rgx::config::Config;
+use rgx::config::{Config, OnOpen};
+use rgx::db::{Db, Session, default_db_path};
 use rgx::engine::native::RustEngine;
+use rgx::session::SessionManager;
 use rgx::tui::app::{App, handle_key, render};
 
 /// Restores the terminal to its original state when dropped.
@@ -65,19 +67,23 @@ fn main() -> Result<()> {
     let config = Config::load(cli.config.as_deref())
         .context("failed to load configuration")?;
 
+    let db_path = default_db_path();
+    let db = Db::open(&db_path).context("failed to open history database")?;
+
+    // Determine session to open based on config and DB state.
+    let manager = resolve_session(db, &config)?;
+
     enable_raw_mode()?;
     execute!(io::stdout(), EnterAlternateScreen)?;
 
-    // Installed immediately after raw mode is enabled so it fires even if
-    // the code below panics. Normal-path cleanup is handled explicitly below.
+    // Panic safety net: restores the terminal even if run() panics.
     let _guard = TerminalGuard;
 
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run(&mut terminal, config);
+    let result = run(&mut terminal, config, manager);
 
-    // Normal path cleanup: errors captured and returned
     let cleanup: Result<()> = (|| {
         disable_raw_mode()?;
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -96,6 +102,86 @@ fn main() -> Result<()> {
     }
 }
 
+/// Decide which session to open based on config and existing DB state.
+///
+/// Runs the splash screen if `on_open` is `Ask` and a previous session exists.
+/// The splash also shows available runtimes (currently only Rust is listed
+/// since engine probing is deferred to a later phase).
+fn resolve_session(db: Db, config: &Config) -> Result<SessionManager> {
+    let most_recent = db.most_recent_session()?;
+
+    match (&config.on_open, most_recent) {
+        // No previous session regardless of config: start fresh, no prompt.
+        (_, None) => SessionManager::new_session(db, "rust", Some("regex")),
+
+        // Config says always continue.
+        (OnOpen::Continue, Some(session)) => {
+            SessionManager::resume(db, session)
+        }
+
+        // Config says always start new.
+        (OnOpen::New, _) => {
+            SessionManager::new_session(db, "rust", Some("regex"))
+        }
+
+        // Config says ask: show the splash and prompt.
+        (OnOpen::Ask, Some(session)) => splash_prompt(db, session, config),
+    }
+}
+
+/// Show the startup splash and prompt the user to continue or start new.
+fn splash_prompt(
+    db: Db,
+    session: Session,
+    _config: &Config,
+) -> Result<SessionManager> {
+    use crossterm::event::{KeyCode, KeyEvent};
+
+    // Enable raw mode just for the duration of the prompt so we can read
+    // single keypresses without waiting for Enter.
+    enable_raw_mode()?;
+
+    print!("\r\n  rgx v{}\r\n", env!("CARGO_PKG_VERSION"));
+    print!("\r\n  \u{2713} Rust    built-in\r\n");
+    print!(
+        "  (additional runtimes shown here once engine probing is implemented)\r\n"
+    );
+    print!("\r\n");
+
+    let session_label = session.name.as_deref().unwrap_or("unnamed session");
+    print!("  Last session: {}\r\n", session_label);
+    print!("\r\n  [C]ontinue   [N]ew session   [q]uit\r\n");
+
+    let result = loop {
+        if event::poll(Duration::from_millis(100))?
+            && let Event::Key(KeyEvent { code, .. }) = event::read()?
+        {
+            match code {
+                KeyCode::Char('c') | KeyCode::Char('C') | KeyCode::Enter => {
+                    break SessionManager::resume(db, session);
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') => {
+                    break SessionManager::new_session(
+                        db,
+                        "rust",
+                        Some("regex"),
+                    );
+                }
+                KeyCode::Char('q') => {
+                    disable_raw_mode()?;
+                    std::process::exit(0);
+                }
+                _ => {}
+            }
+        }
+    };
+
+    // Disable raw mode before handing control back to main().
+    disable_raw_mode()?;
+    print!("\r\n");
+    result
+}
+
 /// Run the application event loop until the user quits.
 ///
 /// Owns the terminal for its entire duration. Returns `Ok(())` when the user
@@ -104,6 +190,7 @@ fn main() -> Result<()> {
 fn run(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     config: Config,
+    manager: SessionManager,
 ) -> Result<()> {
     let engine = RustEngine::new();
     let mut app = App::new(
@@ -112,6 +199,7 @@ fn run(
         config.debounce_ms,
         config.fancy_regex_default,
     );
+    app.attach_session(manager);
 
     // Force an initial render
     terminal.draw(|f| render(&app, f))?;

@@ -30,6 +30,7 @@ use ratatui::{
 };
 use ratatui_textarea::TextArea;
 
+use crate::db::SessionState;
 use crate::engine::{
     native::{
         RustEngine, render_invocation_fancy_regex,
@@ -38,6 +39,7 @@ use crate::engine::{
     },
     types::{EngineError, EvalMode, EvalRequest, EvalResponse, Flags, Match},
 };
+use crate::session::SessionManager;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppMode {
@@ -143,6 +145,10 @@ pub struct App<'a> {
     /// Show Nerd Font icons in the engine tab bar.
     pub nerd_fonts: bool,
 
+    /// Session manager: handles undo/redo and state persistence.
+    /// `None` only during construction before the manager is attached.
+    pub session_manager: Option<SessionManager>,
+
     /// Whether to show the keybind help overlay.
     pub show_help: bool,
 }
@@ -205,6 +211,7 @@ impl<'a> App<'a> {
             debounce_ms,
             results_sub_focus: ResultsSubFocus::Matches,
             nerd_fonts,
+            session_manager: None,
             show_help: false,
         }
     }
@@ -248,6 +255,75 @@ impl<'a> App<'a> {
         // Reset scroll when results change.
         self.matches_scroll = 0;
         self.preview_scroll = 0;
+        self.persist_state();
+    }
+
+    /// Attach a `SessionManager` and optionally load its current state.
+    ///
+    /// Called from `main()` after the app is constructed.
+    pub fn attach_session(&mut self, manager: SessionManager) {
+        if let Ok(Some(state)) = manager.current_state() {
+            self.load_state(&state);
+        }
+        self.session_manager = Some(manager);
+    }
+
+    /// Load a `SessionState` into the live TextArea widgets and flags.
+    ///
+    /// Used by undo, redo, and session resume.
+    pub fn load_state(&mut self, state: &SessionState) {
+        self.pattern = make_textarea(
+            state.pattern.lines().map(|l| l.to_string()).collect(),
+        );
+        self.input =
+            make_textarea(state.input.lines().map(|l| l.to_string()).collect());
+        self.replacement = make_textarea(
+            state.replacement.lines().map(|l| l.to_string()).collect(),
+        );
+        self.eval_mode = if state.mode == "replace" {
+            EvalMode::Replace
+        } else {
+            EvalMode::Match
+        };
+        self.flags = deserialize_flags(&state.options);
+        self.matches_scroll = 0;
+        self.preview_scroll = 0;
+        self.update_borders();
+        self.mark_dirty();
+    }
+
+    /// Capture current TextArea and flag state as a `SessionState`.
+    ///
+    /// Used to push a new state onto the undo stack after evaluation.
+    pub fn capture_state(&self) -> SessionState {
+        SessionState {
+            seq: 0, // assigned by Db::push_state
+            pattern: self.pattern.lines().join("\n"),
+            options: serialize_flags(&self.flags),
+            input: self.input.lines().join("\n"),
+            replacement: self.replacement.lines().join("\n"),
+            mode: if self.eval_mode == EvalMode::Replace {
+                "replace".to_string()
+            } else {
+                "match".to_string()
+            },
+            source_file: None,
+            file_dirty: false,
+        }
+    }
+
+    /// Push the current state onto the session undo stack.
+    ///
+    /// Called after each debounced evaluation. Errors are logged but not fatal.
+    pub fn persist_state(&mut self) {
+        // Capture state before mutably borrowing session_manager to satisfy
+        // the borrow checker (capture_state takes &self).
+        let state = self.capture_state();
+        if let Some(mgr) = &mut self.session_manager
+            && let Err(e) = mgr.push(&state)
+        {
+            eprintln!("warning: failed to persist session state: {}", e);
+        }
     }
 
     /// Update border styles to reflect current focus.
@@ -555,6 +631,26 @@ fn handle_nav(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
         // Help overlay
         (Char('?'), KM::NONE) => app.show_help = !app.show_help,
         (Esc, KM::NONE) if app.show_help => app.show_help = false,
+
+        // Undo / redo (session-level, via SQLite)
+        (Char('z'), KM::CONTROL) => {
+            if let Some(mgr) = &mut app.session_manager {
+                match mgr.undo() {
+                    Ok(Some(state)) => app.load_state(&state),
+                    Ok(None) => {} // already at beginning
+                    Err(e) => eprintln!("undo error: {}", e),
+                }
+            }
+        }
+        (Char('z'), km) if km == KM::CONTROL | KM::SHIFT => {
+            if let Some(mgr) = &mut app.session_manager {
+                match mgr.redo() {
+                    Ok(Some(state)) => app.load_state(&state),
+                    Ok(None) => {} // already at head
+                    Err(e) => eprintln!("redo error: {}", e),
+                }
+            }
+        }
 
         // Cycle engine variant (f for fancy-regex roots, generic across engines)
         (Char('f'), KM::NONE) => app.cycle_variant(),
@@ -1375,6 +1471,56 @@ fn truncate(s: &str, max_chars: usize) -> String {
     } else {
         collected
     }
+}
+
+/// Create a `TextArea` with the given lines and no special styling.
+/// Styling (borders, cursor) is applied by `update_borders` after loading.
+pub(crate) fn make_textarea<'a>(lines: Vec<String>) -> TextArea<'a> {
+    let mut ta = if lines.is_empty() {
+        TextArea::default()
+    } else {
+        TextArea::new(lines)
+    };
+    ta.set_cursor_line_style(ratatui::style::Style::default());
+    ta
+}
+
+/// Serialize the active flags to a compact string stored in the DB.
+/// Format: comma-separated flag names, e.g. "case_insensitive,global".
+pub(crate) fn serialize_flags(flags: &Flags) -> String {
+    let mut parts = Vec::new();
+    if flags.case_insensitive {
+        parts.push("case_insensitive");
+    }
+    if flags.multiline {
+        parts.push("multiline");
+    }
+    if flags.dotall {
+        parts.push("dotall");
+    }
+    if flags.global {
+        parts.push("global");
+    }
+    if flags.extended {
+        parts.push("extended");
+    }
+    parts.join(",")
+}
+
+/// Deserialize flags from the compact string format used in the DB.
+pub(crate) fn deserialize_flags(s: &str) -> Flags {
+    let mut flags = Flags::default();
+    for part in s.split(',') {
+        match part.trim() {
+            "case_insensitive" => flags.case_insensitive = true,
+            "multiline" => flags.multiline = true,
+            "dotall" => flags.dotall = true,
+            "global" => flags.global = true,
+            "extended" => flags.extended = true,
+            _ => {}
+        }
+    }
+    flags
 }
 
 #[cfg(test)]
