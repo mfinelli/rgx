@@ -33,7 +33,8 @@ use ratatui_textarea::TextArea;
 use crate::engine::{
     native::{
         RustEngine, render_invocation_fancy_regex,
-        render_invocation_regex_crate,
+        render_invocation_regex_crate, render_replace_invocation_fancy_regex,
+        render_replace_invocation_regex_crate,
     },
     types::{EngineError, EvalMode, EvalRequest, EvalResponse, Flags, Match},
 };
@@ -51,6 +52,8 @@ pub enum Focus {
     Pattern,
     Input,
     Flags,
+    /// The replacement string field (only reachable when in replace mode).
+    Replacement,
     Results,
 }
 
@@ -124,6 +127,12 @@ pub struct App<'a> {
     /// Scroll offset for the input preview sub-pane.
     pub preview_scroll: usize,
 
+    /// Current evaluation mode (match or replace).
+    pub eval_mode: EvalMode,
+
+    /// The replacement string TextArea (visible only in replace mode).
+    pub replacement: TextArea<'a>,
+
     pub eval_result: Option<Result<EvalResponse, EngineError>>,
     pub last_edit: Option<Instant>,
     pub debounce_ms: u64,
@@ -167,6 +176,14 @@ impl<'a> App<'a> {
         );
         input.set_cursor_line_style(Style::default());
 
+        let mut replacement = TextArea::default();
+        replacement.set_block(
+            Block::default()
+                .title(" Replacement ")
+                .borders(Borders::ALL),
+        );
+        replacement.set_cursor_line_style(Style::default());
+
         Self {
             mode: AppMode::Insert,
             focus: Focus::Pattern,
@@ -181,6 +198,8 @@ impl<'a> App<'a> {
             results_view,
             matches_scroll: 0,
             preview_scroll: 0,
+            eval_mode: EvalMode::Match,
+            replacement,
             eval_result: None,
             last_edit: None,
             debounce_ms,
@@ -220,8 +239,8 @@ impl<'a> App<'a> {
             pattern,
             flags: self.flags.clone(),
             input: input_text,
-            mode: EvalMode::Match,
-            replacement: String::new(),
+            mode: self.eval_mode.clone(),
+            replacement: self.replacement.lines().join("\n"),
             use_fancy: self.use_fancy,
         };
 
@@ -256,12 +275,27 @@ impl<'a> App<'a> {
                     inactive
                 }),
         );
+        self.replacement.set_block(
+            Block::default()
+                .title(" Replacement ")
+                .borders(Borders::ALL)
+                .border_style(if self.focus == Focus::Replacement {
+                    active
+                } else {
+                    inactive
+                }),
+        );
     }
 
     /// Move focus and switch to Insert mode (for text fields).
     /// For non-text panes (Flags, Results) stays in Nav mode.
+    /// Jumping to Replacement is a no-op when not in replace mode.
     pub fn jump_to(&mut self, focus: Focus) {
-        let is_text = matches!(focus, Focus::Pattern | Focus::Input);
+        if focus == Focus::Replacement && self.eval_mode != EvalMode::Replace {
+            return;
+        }
+        let is_text =
+            matches!(focus, Focus::Pattern | Focus::Input | Focus::Replacement);
         self.focus = focus;
         if is_text {
             self.mode = AppMode::Insert;
@@ -272,11 +306,21 @@ impl<'a> App<'a> {
     /// Cycle focus forward: Pattern -> Input -> Flags -> Results -> Pattern
     ///
     /// Order matches the visual top-to-bottom layout.
+    /// Replacement is included in the cycle only when in replace mode,
+    /// sitting between Pattern and Input to match the visual layout.
     /// Does not enter Insert mode (Tab cycling should never capture input).
     /// Insert mode activates only when the user presses Enter or types a char.
     fn cycle_focus(&mut self) {
+        let replace_mode = self.eval_mode == EvalMode::Replace;
         self.focus = match self.focus {
-            Focus::Pattern => Focus::Input,
+            Focus::Pattern => {
+                if replace_mode {
+                    Focus::Replacement
+                } else {
+                    Focus::Input
+                }
+            }
+            Focus::Replacement => Focus::Input,
             Focus::Input => Focus::Flags,
             Focus::Flags => Focus::Results,
             Focus::Results => Focus::Pattern,
@@ -284,11 +328,19 @@ impl<'a> App<'a> {
         self.update_borders();
     }
 
-    /// Cycle focus backward: Pattern -> Results -> Flags -> Input -> Pattern
+    /// Cycle focus backward.
     fn cycle_focus_back(&mut self) {
+        let replace_mode = self.eval_mode == EvalMode::Replace;
         self.focus = match self.focus {
             Focus::Pattern => Focus::Results,
-            Focus::Input => Focus::Pattern,
+            Focus::Replacement => Focus::Pattern,
+            Focus::Input => {
+                if replace_mode {
+                    Focus::Replacement
+                } else {
+                    Focus::Pattern
+                }
+            }
             Focus::Flags => Focus::Input,
             Focus::Results => Focus::Flags,
         };
@@ -298,6 +350,25 @@ impl<'a> App<'a> {
     /// Cycle the engine variant (global shortcut and flag row Space/Enter).
     pub fn cycle_variant(&mut self) {
         self.use_fancy = !self.use_fancy;
+        self.mark_dirty();
+    }
+
+    /// Toggle between match and replace evaluation modes.
+    /// When switching to replace mode, resets focus to pattern if currently
+    /// on Replacement (to avoid stale focus state).
+    pub fn toggle_eval_mode(&mut self) {
+        self.eval_mode = match self.eval_mode {
+            EvalMode::Match => EvalMode::Replace,
+            EvalMode::Replace => {
+                // If focus was on the replacement field, move it back
+                if self.focus == Focus::Replacement {
+                    self.focus = Focus::Pattern;
+                    self.mode = AppMode::Insert;
+                }
+                EvalMode::Match
+            }
+        };
+        self.update_borders();
         self.mark_dirty();
     }
 
@@ -374,12 +445,28 @@ impl<'a> App<'a> {
     /// Returns the fully rendered invocation shown in the status line.
     ///
     /// Delegates to the engine-specific renderer so each engine shows its
-    /// own idiomatic syntax. As more engines are added this will dispatch
-    /// to each engine's own implementation.
+    /// own idiomatic syntax. Shows the replace call when in replace mode.
     pub fn status_invocation(&self) -> String {
         let pattern = self.pattern.lines().join("");
+        let replacement = self.replacement.lines().join("");
+        let replace_mode = self.eval_mode == EvalMode::Replace;
+
         if self.use_fancy {
-            render_invocation_fancy_regex(&pattern, &self.flags)
+            if replace_mode {
+                render_replace_invocation_fancy_regex(
+                    &pattern,
+                    &replacement,
+                    &self.flags,
+                )
+            } else {
+                render_invocation_fancy_regex(&pattern, &self.flags)
+            }
+        } else if replace_mode {
+            render_replace_invocation_regex_crate(
+                &pattern,
+                &replacement,
+                &self.flags,
+            )
         } else {
             render_invocation_regex_crate(&pattern, &self.flags)
         }
@@ -401,6 +488,12 @@ pub fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
     // ctrl+t: jump to test input field
     if key.modifiers == KM::CONTROL && key.code == Char('t') {
         app.jump_to(Focus::Input);
+        return false;
+    }
+
+    // ctrl+g: jump to replacement field (no-op when not in replace mode)
+    if key.modifiers == KM::CONTROL && key.code == Char('g') {
+        app.jump_to(Focus::Replacement);
         return false;
     }
 
@@ -434,6 +527,10 @@ fn handle_insert(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
                 app.input.input(key);
                 app.mark_dirty();
             }
+            Focus::Replacement => {
+                app.replacement.input(key);
+                app.mark_dirty();
+            }
             Focus::Flags => {
                 if key.code == Char(' ') {
                     app.activate_flag_row();
@@ -461,6 +558,9 @@ fn handle_nav(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
 
         // Cycle engine variant (f for fancy-regex roots, generic across engines)
         (Char('f'), KM::NONE) => app.cycle_variant(),
+
+        // Toggle replace mode
+        (Char('m'), KM::NONE) => app.toggle_eval_mode(),
 
         // Cycle results view
         (Char('v'), KM::NONE) => {
@@ -517,7 +617,10 @@ fn handle_nav(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
         | (Right, KM::NONE)
         | (Backspace, KM::NONE)
         | (Delete, KM::NONE)
-            if matches!(app.focus, Focus::Pattern | Focus::Input) =>
+            if matches!(
+                app.focus,
+                Focus::Pattern | Focus::Input | Focus::Replacement
+            ) =>
         {
             app.mode = AppMode::Insert;
             app.update_borders();
@@ -531,6 +634,10 @@ fn handle_nav(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
                 }
                 Focus::Input => {
                     app.input.input(key);
+                    app.mark_dirty();
+                }
+                Focus::Replacement => {
+                    app.replacement.input(key);
                     app.mark_dirty();
                 }
                 _ => {}
@@ -558,27 +665,50 @@ pub fn render(app: &App, frame: &mut Frame) {
     }
 
     // Vertical layout:
-    // [engine bar 1] [pattern 3] [input flex] [flags 1] [results flex] [status 1] [hint 1]
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1), // engine bar
-            Constraint::Length(3), // pattern
-            Constraint::Min(4),    // input
-            Constraint::Length(1), // flags row
-            Constraint::Min(4),    // results
-            Constraint::Length(1), // status
-            Constraint::Length(1), // key hint
-        ])
-        .split(area);
+    // [engine bar 1] [pattern 3] [replacement 3?] [input flex] [flags 1] [results flex] [status 1] [hint 1]
+    // Replacement row only appears in replace mode, between pattern and input.
+    let replace_mode = app.eval_mode == EvalMode::Replace;
+
+    let chunks = if replace_mode {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1), // engine bar
+                Constraint::Length(3), // pattern
+                Constraint::Length(3), // replacement (replace mode only)
+                Constraint::Min(4),    // input
+                Constraint::Length(1), // flags row
+                Constraint::Min(4),    // results / output
+                Constraint::Length(1), // status
+                Constraint::Length(1), // key hint
+            ])
+            .split(area)
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1), // engine bar
+                Constraint::Length(3), // pattern
+                Constraint::Length(0), // placeholder (no replacement)
+                Constraint::Min(4),    // input
+                Constraint::Length(1), // flags row
+                Constraint::Min(4),    // results
+                Constraint::Length(1), // status
+                Constraint::Length(1), // key hint
+            ])
+            .split(area)
+    };
 
     render_engine_bar(app, frame, chunks[0]);
     render_pattern(app, frame, chunks[1]);
-    render_input(app, frame, chunks[2]);
-    render_flags(app, frame, chunks[3]);
-    render_results(app, frame, chunks[4]);
-    render_status(app, frame, chunks[5]);
-    render_hint(app, frame, chunks[6]);
+    if replace_mode {
+        render_replacement(app, frame, chunks[2]);
+    }
+    render_input(app, frame, chunks[3]);
+    render_flags(app, frame, chunks[4]);
+    render_results(app, frame, chunks[5]);
+    render_status(app, frame, chunks[6]);
+    render_hint(app, frame, chunks[7]);
 
     if app.show_help {
         render_help_overlay(frame, area);
@@ -675,9 +805,17 @@ fn render_input(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(&app.input, area);
 }
 
-/// Render the results pane, dispatching to the appropriate layout based
-/// on `app.results_view`. Shows a placeholder when there is no pattern,
-/// an error message on parse failure, or match results on success.
+/// Render the replacement string field.
+/// Only called when in replace mode.
+fn render_replacement(app: &App, frame: &mut Frame, area: Rect) {
+    frame.render_widget(&app.replacement, area);
+}
+
+/// Render the results pane.
+///
+/// In match mode: dispatches to the appropriate split/preview/matches layout.
+/// In replace mode: shows the full replaced output text.
+/// Shows a placeholder when there is no pattern, or an error on parse failure.
 fn render_results(app: &App, frame: &mut Frame, area: Rect) {
     let focused = app.focus == Focus::Results;
     let border_style = if focused {
@@ -686,8 +824,12 @@ fn render_results(app: &App, frame: &mut Frame, area: Rect) {
         Style::default().fg(Color::DarkGray)
     };
 
-    let view_label = app.results_view.label();
-    let title = format!(" Results [{}] ", view_label);
+    let replace_mode = app.eval_mode == EvalMode::Replace;
+    let title = if replace_mode {
+        " Output ".to_string()
+    } else {
+        format!(" Results [{}] ", app.results_view.label())
+    };
 
     let block = Block::default()
         .title(title.as_str())
@@ -717,7 +859,57 @@ fn render_results(app: &App, frame: &mut Frame, area: Rect) {
             );
         }
         Some(Ok(resp)) => {
-            render_match_results(app, resp, block, frame, area);
+            if replace_mode {
+                render_replace_output(resp, block, frame, area);
+            } else {
+                render_match_results(app, resp, block, frame, area);
+            }
+        }
+    }
+}
+
+/// Render the replaced output text in replace mode.
+fn render_replace_output(
+    resp: &EvalResponse,
+    block: Block,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    match &resp.replaced {
+        Some(text) => {
+            let match_count = resp.matches.len();
+            let header = Line::from(vec![Span::styled(
+                format!(
+                    "{} replacement{}",
+                    match_count,
+                    if match_count == 1 { "" } else { "s" }
+                ),
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )]);
+
+            let output_lines: Vec<Line> = std::iter::once(header)
+                .chain(std::iter::once(Line::raw("")))
+                .chain(text.split('\n').map(|l| Line::raw(l.to_string())))
+                .collect();
+
+            frame.render_widget(
+                Paragraph::new(output_lines).wrap(Wrap { trim: false }),
+                inner,
+            );
+        }
+        None => {
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    "no match",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                inner,
+            );
         }
     }
 }
@@ -1087,7 +1279,7 @@ fn render_hint(app: &App, frame: &mut Frame, area: Rect) {
     };
 
     let hints = Span::styled(
-        "  Esc: nav  │  ctrl+p: pattern  │  ctrl+t: input  │  Tab: cycle  │  v: view  │  f: fancy  │  ?: help  │  q: quit",
+        "  Esc: nav  │  ctrl+p: pattern  │  ctrl+t: input  │  ctrl+g: replace  │  Tab: cycle  │  m: mode  │  v: view  │  ?: help  │  q: quit",
         Style::default().fg(Color::DarkGray),
     );
 
@@ -1132,6 +1324,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         Line::raw("   Tab         Cycle focus forward"),
         Line::raw("   Shift+Tab   Cycle focus backward"),
         Line::raw("   f           Toggle fancy-regex mode"),
+        Line::raw("   m           Toggle replace mode"),
         Line::raw("   v           Cycle results view"),
         Line::raw("   Enter       Re-enter insert mode"),
         Line::raw(""),

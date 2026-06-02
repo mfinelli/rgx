@@ -331,6 +331,59 @@ pub fn render_invocation_fancy_regex(pattern: &str, flags: &Flags) -> String {
     format!("fancy_regex::Regex::new(r\"{}\")", rendered)
 }
 
+/// Renders the `regex` crate replace invocation using `replace`/`replace_all`.
+///
+/// Example: `re.replace_all(input, "$1 world")`
+pub fn render_replace_invocation_regex_crate(
+    pattern: &str,
+    replacement: &str,
+    flags: &Flags,
+) -> String {
+    if pattern.is_empty() {
+        return "regex · RE2-style, linear time, no lookahead".to_string();
+    }
+
+    let compiled = render_invocation_regex_crate(pattern, flags);
+    let native_replacement = normalized_to_rust_replacement(replacement);
+    let method = if flags.global {
+        "replace_all"
+    } else {
+        "replace"
+    };
+
+    format!(
+        "let re = {}?; re.{}(input, {:?})",
+        compiled, method, native_replacement
+    )
+}
+
+/// Renders the `fancy-regex` crate replace invocation.
+///
+/// Example: `re.replace_all(input, "$1 world")`
+pub fn render_replace_invocation_fancy_regex(
+    pattern: &str,
+    replacement: &str,
+    flags: &Flags,
+) -> String {
+    if pattern.is_empty() {
+        return "fancy-regex · PCRE-style, lookahead/lookbehind/backreferences"
+            .to_string();
+    }
+
+    let compiled = render_invocation_fancy_regex(pattern, flags);
+    let native_replacement = normalized_to_rust_replacement(replacement);
+    let method = if flags.global {
+        "replace_all"
+    } else {
+        "replace"
+    };
+
+    format!(
+        "let re = {}?; re.{}(input, {:?})",
+        compiled, method, native_replacement
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
