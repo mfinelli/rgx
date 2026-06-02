@@ -7,7 +7,8 @@ based on the [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) format.
 
 ## unreleased
 
-Add replace mode
+- Add replace mode
+- Add session storage
 
 ## v0.1.0 - 2026/06/01
 

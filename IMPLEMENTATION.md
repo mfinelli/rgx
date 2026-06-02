@@ -56,7 +56,7 @@ Rust matches. Everything else builds on this foundation.
 - Escape → nav layer, bare-key shortcuts active
 - `ctrl+p` / `ctrl+t` quick-jump keybinds (work inside text fields)
 - `ctrl+g` (replacement field jump) implemented in phase 6 ✓
-- `ctrl+z` / `ctrl+shift+z` undo/redo deferred to phase 14 (SQLite sessions)
+- `ctrl+z` / `ctrl+shift+z` undo/redo implemented in phase 7 ✓
 - Full keybind table implemented and conflict-checked
 - `?` opens keybind reference panel
 - Terminal-too-small guard
@@ -141,16 +141,25 @@ Rust matches. Everything else builds on this foundation.
 
 ## Phase 7 — Persistence and session model
 
-**16. SQLite foundation**
-- Schema creation and `rusqlite_migration` setup
-- Schema version table, initial migration
-- Session and `session_states` tables
-- FTS5 virtual table and triggers
+**16. SQLite foundation** ✓
+- `src/db/` module with `rusqlite` (bundled feature) and `rusqlite_migration` ✓
+- Migration SQL in `src/db/migrations/01_initial.sql`, embedded via `include_str!()` ✓
+- WAL mode + foreign keys set per-connection (cannot run inside migration transactions) ✓
+- STRICT tables for type enforcement ✓
+- Nullable text fields use NULL for absent values; CHECK constraints reject empty strings ✓
+- Indexes: `updated_at DESC`, `name` (partial), `(language, flavor)` composite,
+  `forked_from_id` (partial); `UNIQUE(session_id, seq)` auto-index on session_states ✓
+- FTS5 virtual table deferred to history panel phase
 
-**17. Undo/redo via SQLite**
-- Replace in-memory undo stack with SQLite-backed session states
-- `undo_cursor` persisted on every change
-- Crash recovery guaranteed by WAL mode + atomic writes
+**17. Undo/redo via SQLite** ✓
+- `src/session.rs` — `SessionManager` wraps `Db`, owns active session ✓
+- `ctrl+z` / `ctrl+shift+z` undo/redo wired in nav layer ✓
+- `undo_cursor` persisted on every push/undo/redo — crash recovery automatic ✓
+- State written after each debounced evaluation via `persist_state()` ✓
+- Minimal splash screen: shows Rust as available, `[C]ontinue [N]ew [q]uit` prompt ✓
+- `on_open` config key: `continue` / `new` / `ask` (default `ask`) ✓
+- `db_path` config key to override default XDG location ✓
+- Non-head edit truncates forward history (full implicit fork deferred to step 19)
 
 **18. Session list and history panel**
 - Toggleable history panel (`h` in nav layer)
@@ -162,7 +171,7 @@ Rust matches. Everything else builds on this foundation.
 
 **19. Implicit fork on non-head edit**
 - Detect edit while `undo_cursor` is not at head
-- Create new session with `forked_from_id` + `forked_at_seq`
+- Create new session with `forked_from_id` + `forked_at_seq` (schema ready)
 - Ancestry reconstruction for display
 - Fork indicator in UI
 
@@ -247,8 +256,9 @@ Each follows the same pattern as Python/Node. Wire into the tab bar.
 - Implemented keys: `nerd_fonts`, `default_results_view`, `debounce_ms`, `fancy_regex_default` ✓
 - Config loaded at startup before TUI, passed into `App::new()` ✓
 - Unknown keys rejected with error message ✓
+- `on_open` and `db_path` implemented in phase 7 ✓
 - Remaining keys deferred until their features are implemented:
-  `on_open`, `history_cleanup_days`, `show_probe_splash`, `large_file_warn_mb`,
+  `history_cleanup_days`, `show_probe_splash`, `large_file_warn_mb`,
   `mouse`, and all `[runtimes.*]` sections
 
 ---

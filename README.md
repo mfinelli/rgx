@@ -152,11 +152,44 @@ default_results_view = "split_vertical"  # split_vertical | split_horizontal | p
 # Evaluation
 debounce_ms = 150                # ms to wait after last keystroke before evaluating
 
+# Sessions
+on_open = "ask"                  # "ask" | "continue" | "new"
+db_path = "/custom/path.db"      # default: ~/.local/share/rgx/history.db
+
 # Rust engine
 fancy_regex_default = false      # start on fancy-regex variant instead of regex
 ```
 
 Unknown keys are rejected with an error message pointing to the offending line.
+
+## Sessions and undo/redo
+
+`rgx` automatically saves your work to `~/.local/share/rgx/history.db`. Every
+time the engine evaluates (after the debounce), the current pattern, input,
+flags, and replacement are persisted.
+
+**On startup** (when `on_open = "ask"`, the default), a splash screen shows
+available runtimes and asks whether to continue the last session or start fresh:
+
+```
+  rgx v0.1.0
+
+  ✓ Rust    built-in
+
+  Last session: unnamed session
+
+  [C]ontinue   [N]ew session   [q]uit
+```
+
+**Undo/redo** operates at the session level — each evaluation is a checkpoint:
+
+| Key | Action |
+|-----|--------|
+| `ctrl+z` | Undo to previous evaluation state |
+| `ctrl+shift+z` | Redo to next evaluation state |
+
+The history panel (`h` in nav mode) for browsing, naming, and switching between
+sessions is coming in the next phase.
 
 ## What's coming
 
@@ -164,5 +197,5 @@ See [DESIGN.md](DESIGN.md) for the full feature specification and
 [IMPLEMENTATION.md](IMPLEMENTATION.md) for the planned build sequence.
 
 Upcoming phases add: multi-engine tabs (Python, Node, Ruby, PHP, Go, grep,
-sed), replace mode, session history with undo/redo, named sessions, reference
-panels, snippet export, file input, and configuration file support.
+sed), history panel UI with named sessions, reference panels, snippet export,
+file input, and runtime probe splash screen.

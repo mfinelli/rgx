@@ -543,10 +543,11 @@ When the user edits while `undo_cursor` is not at the head of the stack (i.e. af
 
 ### On Open Behaviour
 
-Configurable via `on_open` in config:
+Configurable via `on_open` in config (default: `ask`):
 - `continue` — always resume the last active session at its saved `undo_cursor`
 - `new` — always start a fresh session
-- `ask` — one-line prompt: `[C]ontinue last session  [N]ew session`
+- `ask` — minimal splash screen showing available runtimes, then prompts
+  `[C]ontinue   [N]ew session   [q]uit`
 
 ### Session List Navigation
 
@@ -702,6 +703,8 @@ File location: `~/.config/rgx/config.toml` (XDG config dir).
 ```toml
 # UI
 nerd_fonts = false
+
+# db_path = "/custom/path/history.db"  # default: ~/.local/share/rgx/history.db
 default_language = "rust"    # which tab opens by default
 mouse = false                # enable mouse support
 default_results_view = "split_vertical"  # "split_vertical" | "split_horizontal" | "preview" | "matches"
@@ -736,58 +739,74 @@ prefer = "auto"              # "auto" | "gnu" | "bsd" | "ggrep" | "rg"
 
 ## Database Schema
 
-Location: `~/.local/share/rgx/history.db` (XDG data dir).
+Default location: `~/.local/share/rgx/history.db` (XDG data dir).
+Overridable via `db_path` in config.
+
+Migration SQL lives in `src/db/migrations/` and is embedded into the binary
+at compile time via `include_str!()` — no external files needed at runtime.
+`rusqlite_migration` applies pending migrations automatically on startup.
+
+WAL mode and foreign key enforcement are set per-connection in Rust rather
+than in migration SQL, since they cannot run inside the transaction that
+`rusqlite_migration` uses.
+
+All tables use SQLite STRICT mode (requires SQLite ≥ 3.37, 2021-11-27).
+
+Nullable text fields use `NULL` to mean "absent" and reject empty strings via
+`CHECK` constraints. The Rust layer converts `""` → `None` before writing and
+`None` → `""` after reading.
 
 ```sql
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
-
--- Schema version for migrations (rusqlite_migration crate)
-CREATE TABLE schema_version (
-    version INTEGER NOT NULL
-);
+-- src/db/migrations/01_initial.sql
 
 CREATE TABLE sessions (
     id              INTEGER PRIMARY KEY,
-    name            TEXT,                        -- null = unnamed
-    language        TEXT NOT NULL,               -- last active engine tab
-    flavor          TEXT,                        -- last active sub-flavor
-    created_at      TEXT NOT NULL,               -- ISO 8601
-    updated_at      TEXT NOT NULL,
+    name            TEXT    CHECK (name IS NULL OR name != ''),
+    language        TEXT    NOT NULL CHECK (language != ''),
+    flavor          TEXT    CHECK (flavor IS NULL OR flavor != ''),
+    created_at      TEXT    NOT NULL,   -- ISO 8601 with milliseconds
+    updated_at      TEXT    NOT NULL,
     use_count       INTEGER NOT NULL DEFAULT 1,
-    undo_cursor     INTEGER NOT NULL DEFAULT 0,  -- current seq position
+    undo_cursor     INTEGER NOT NULL DEFAULT 0,
     forked_from_id  INTEGER REFERENCES sessions(id),
-    forked_at_seq   INTEGER                      -- seq in parent at fork point
-);
+    forked_at_seq   INTEGER
+) STRICT;
 
 CREATE TABLE session_states (
     id           INTEGER PRIMARY KEY,
     session_id   INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     seq          INTEGER NOT NULL,
-    pattern      TEXT NOT NULL,
-    options      TEXT NOT NULL DEFAULT '',       -- normalized flags, JSON array
-    input        TEXT NOT NULL DEFAULT '',
-    replacement  TEXT NOT NULL DEFAULT '',
-    mode         TEXT NOT NULL DEFAULT 'match',  -- "match" | "replace"
-    source_file  TEXT,                           -- nullable, path of loaded file
-    file_dirty   INTEGER NOT NULL DEFAULT 0,     -- 1 if edited after file load
+    pattern      TEXT    CHECK (pattern IS NULL OR pattern != ''),
+    options      TEXT    CHECK (options IS NULL OR options != ''),
+    input        TEXT    CHECK (input IS NULL OR input != ''),
+    replacement  TEXT    CHECK (replacement IS NULL OR replacement != ''),
+    mode         TEXT    NOT NULL DEFAULT 'match'
+                         CHECK (mode IN ('match', 'replace')),
+    source_file  TEXT    CHECK (source_file IS NULL OR source_file != ''),
+    file_dirty   INTEGER NOT NULL DEFAULT 0,
     UNIQUE(session_id, seq)
-);
+) STRICT;
 
--- Full-text search over session name and pattern
-CREATE VIRTUAL TABLE sessions_fts USING fts5(
-    name,
-    pattern,
-    content=sessions,
-    content_rowid=id
-);
+-- Indexes
+CREATE INDEX idx_sessions_updated_at       ON sessions(updated_at DESC);
+CREATE INDEX idx_sessions_name             ON sessions(name) WHERE name IS NOT NULL;
+CREATE INDEX idx_sessions_language_flavor  ON sessions(language, flavor);
+CREATE INDEX idx_sessions_forked_from_id   ON sessions(forked_from_id)
+    WHERE forked_from_id IS NOT NULL;
+-- session_states: UNIQUE(session_id, seq) auto-creates a composite B-tree
+-- index covering all queries on that table.
 ```
 
-**Migrations**: `rusqlite_migration` crate. Migrations run automatically on startup before any other DB access.
+**Migrations**: add a new `M::up(include_str!("migrations/NN_description.sql"))` entry
+in `src/db/mod.rs`. Do not edit existing migrations. Down migrations are not supported —
+the app always migrates forward on startup.
 
-**Ancestry reconstruction**: to reconstruct the full state history of a forked session, walk `forked_from_id` recursively, collecting states up to `forked_at_seq` from each ancestor, then append the session's own states. States are never duplicated in the DB.
+**Ancestry reconstruction**: to reconstruct the full state history of a forked session,
+walk `forked_from_id` recursively, collecting states up to `forked_at_seq` from each
+ancestor, then append the session's own states. States are never duplicated in the DB.
 
-**FTS scope**: indexes `name` and `pattern` from the `sessions` table. Search finds sessions, not individual historical states.
+**FTS**: a future migration will add an FTS5 virtual table over `sessions.name` and the
+most recent `pattern` per session, used by the history panel search.
 
 ---
 
