@@ -30,7 +30,7 @@ use ratatui::{
 };
 use ratatui_textarea::TextArea;
 
-use crate::db::SessionState;
+use crate::db::store::SessionState;
 use crate::engine::{
     native::{
         RustEngine, render_invocation_fancy_regex,

@@ -32,6 +32,10 @@ pub struct Config {
     /// Show Nerd Font icons in the engine tab bar.
     pub nerd_fonts: bool,
 
+    /// Override the default database path (`~/.local/share/rgx/history.db`).
+    /// Useful for testing or keeping multiple separate history databases.
+    pub db_path: Option<PathBuf>,
+
     /// What to do with sessions on startup.
     pub on_open: OnOpen,
 
@@ -49,6 +53,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             nerd_fonts: false,
+            db_path: None,
             on_open: OnOpen::default(),
             default_results_view: ResultsViewConfig::default(),
             debounce_ms: 150,

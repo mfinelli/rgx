@@ -23,7 +23,7 @@
 
 use anyhow::Result;
 
-use crate::db::{Db, Session, SessionState};
+use crate::db::store::{Db, Session, SessionState};
 
 /// Manages the active session and its undo/redo stack.
 pub struct SessionManager {

@@ -33,7 +33,7 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 
 use rgx::cli::{Cli, Command};
 use rgx::config::{Config, OnOpen};
-use rgx::db::{Db, Session, default_db_path};
+use rgx::db::store::{Db, Session, default_db_path};
 use rgx::engine::native::RustEngine;
 use rgx::session::SessionManager;
 use rgx::tui::app::{App, handle_key, render};
@@ -67,7 +67,7 @@ fn main() -> Result<()> {
     let config = Config::load(cli.config.as_deref())
         .context("failed to load configuration")?;
 
-    let db_path = default_db_path();
+    let db_path = config.db_path.clone().unwrap_or_else(default_db_path);
     let db = Db::open(&db_path).context("failed to open history database")?;
 
     // Determine session to open based on config and DB state.
