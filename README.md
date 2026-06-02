@@ -42,7 +42,7 @@ rgx completions fish >  ~/.config/fish/completions/rgx.fish
 |-----|--------|
 | `ctrl+p` | Jump to pattern field |
 | `ctrl+t` | Jump to test input field |
-| `ctrl+g` | Jump to replacement field *(coming in replace mode phase)* |
+| `ctrl+g` | Jump to replacement field (replace mode only) |
 
 ### Nav layer (press `Escape` to enter)
 
@@ -55,7 +55,7 @@ rgx completions fish >  ~/.config/fish/completions/rgx.fish
 | `← →` | Switch active sub-pane in split views / navigate flags |
 | `f` | Cycle engine variant (regex ↔ fancy-regex) |
 | `v` | Cycle results view |
-| `m` | Toggle replace mode *(coming in replace mode phase)* |
+| `m` | Toggle replace mode |
 | `h` | Toggle history panel *(coming in sessions phase)* |
 | `y` | Copy menu *(coming in copy/export phase)* |
 | `r` | Rescan runtimes *(coming in runtime probe phase)* |
@@ -89,6 +89,32 @@ Cycle with `v` when the results pane is focused or from the nav layer:
 | `matches` | Match breakdown only, full pane |
 
 In split views, `←`/`→` switches which sub-pane scrolls.
+
+## Replace mode
+
+Press `m` in the nav layer to toggle replace mode. A replacement field appears
+between the pattern and test input, making the layout read as a pipeline:
+
+```
+Pattern      — the regex
+Replacement  — what to replace matches with
+Test Input   — the text to operate on
+Output       — the transformed result
+```
+
+Use `ctrl+g` to jump directly to the replacement field, or `Tab` through the
+panes. The output pane shows the replaced text with a replacement count.
+
+Replacement syntax uses the normalized form — `{1}` for indexed groups,
+`{name}` for named groups. The status line shows the actual Rust call:
+
+```
+# global replace
+let re = Regex::new(r"(\w+)")?; re.replace_all(input, "$1")
+
+# first match only (global flag off)
+let re = Regex::new(r"(\w+)")?; re.replace(input, "$1")
+```
 
 ## Engine variants
 

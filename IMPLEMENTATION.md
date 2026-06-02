@@ -55,7 +55,7 @@ Rust matches. Everything else builds on this foundation.
 **7. Navigation model** ✓
 - Escape → nav layer, bare-key shortcuts active
 - `ctrl+p` / `ctrl+t` quick-jump keybinds (work inside text fields)
-- `ctrl+g` (replacement field jump) deferred to phase 6 (replace mode)
+- `ctrl+g` (replacement field jump) implemented in phase 6 ✓
 - `ctrl+z` / `ctrl+shift+z` undo/redo deferred to phase 14 (SQLite sessions)
 - Full keybind table implemented and conflict-checked
 - `?` opens keybind reference panel
@@ -125,15 +125,17 @@ Rust matches. Everything else builds on this foundation.
 
 ## Phase 6 — Replace mode
 
-**15. Replace mode**
-- `m` in nav layer toggles mode
-- Replacement input field appears above results pane
-- Normalized internal replacement syntax (`{1}`, `{name}`)
-- Per-engine translation table (see DESIGN.md Replace Mode section)
-- Named → indexed auto-conversion for sed, with warning and restoration on
-  switch back
-- `rg --replace` support in the grep tab
-- Unsupported flag warnings when switching engines with active flags
+**15. Replace mode** ✓ *(Rust engine only — other engines added alongside their tabs)*
+- `m` in nav layer toggles mode ✓
+- Replacement input field between pattern and test input (pattern → replacement → input → output pipeline) ✓
+- `ctrl+g` jumps to replacement field ✓
+- Normalized internal replacement syntax (`{1}`, `{name}`) ✓
+- Rust-native translation: `{1}` → `$1`, `{name}` → `${name}` ✓
+- Output pane shows replaced text with replacement count ✓
+- Status line shows replace invocation (`re.replace_all(input, "$1")`) ✓
+- Per-engine translation table for future engines (see DESIGN.md Replace Mode section)
+- Named → indexed auto-conversion for sed deferred to sed tab implementation
+- `rg --replace` support deferred to grep/rg tab implementation
 
 ---
 

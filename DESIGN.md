@@ -414,7 +414,7 @@ Updates live with every change. Right side of status line shows match count.
 
 ### Activation
 
-`m` in the nav layer toggles between match and replace mode. In replace mode a replacement input field appears above the results pane. Default is always match mode regardless of engine.
+`m` in the nav layer toggles between match and replace mode. In replace mode a replacement input field appears between the pattern and test input fields — the layout reads top-to-bottom as a transformation pipeline: pattern → replacement → input → output. Default is always match mode regardless of engine.
 
 ### sed and grep
 
