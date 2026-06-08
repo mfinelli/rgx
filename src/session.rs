@@ -23,7 +23,7 @@
 
 use anyhow::Result;
 
-use crate::db::store::{Db, Session, SessionState};
+use crate::db::store::{Db, ListFilter, Session, SessionState, SessionSummary};
 
 /// Manages the active session and its undo/redo stack.
 pub struct SessionManager {
@@ -121,5 +121,49 @@ impl SessionManager {
     /// Whether redo is available (requires a DB query).
     pub fn can_redo(&self) -> Result<bool> {
         Ok(self.cursor < self.db.max_seq(self.session_id)?)
+    }
+
+    /// List sessions for the history panel.
+    pub fn list_sessions(
+        &self,
+        filter: &ListFilter,
+    ) -> Result<Vec<SessionSummary>> {
+        self.db.list_sessions(filter)
+    }
+
+    /// Rename the current session. Pass `None` to clear the name.
+    pub fn rename_current(&self, name: Option<&str>) -> Result<()> {
+        self.db.rename_session(self.session_id, name)
+    }
+
+    /// Rename any session by id.
+    pub fn rename_session(&self, id: i64, name: Option<&str>) -> Result<()> {
+        self.db.rename_session(id, name)
+    }
+
+    /// Delete a session by id. Refuses to delete the active session.
+    pub fn delete_session(&self, id: i64) -> Result<()> {
+        if id == self.session_id {
+            anyhow::bail!("cannot delete the active session");
+        }
+        self.db.delete_session(id)
+    }
+
+    /// Switch to a different session. Returns the state to load into the app,
+    /// or `None` if the target session has no states yet.
+    ///
+    /// Updates `session_id` and `cursor` to reflect the new active session.
+    pub fn switch_to(&mut self, id: i64) -> Result<Option<SessionState>> {
+        if id == self.session_id {
+            return self.current_state();
+        }
+        let session = self
+            .db
+            .get_session(id)?
+            .ok_or_else(|| anyhow::anyhow!("session {} not found", id))?;
+        self.db.increment_use_count(id)?;
+        self.session_id = session.id;
+        self.cursor = session.undo_cursor;
+        self.current_state()
     }
 }

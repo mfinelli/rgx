@@ -30,7 +30,9 @@ use ratatui::{
 };
 use ratatui_textarea::TextArea;
 
-use crate::db::store::SessionState;
+use crate::db::store::{
+    ListFilter, SessionState, SessionSummary, engine_icon, time_ago,
+};
 use crate::engine::{
     native::{
         RustEngine, render_invocation_fancy_regex,
@@ -57,6 +59,8 @@ pub enum Focus {
     /// The replacement string field (only reachable when in replace mode).
     Replacement,
     Results,
+    /// The history panel.
+    History,
 }
 
 /// The four results pane layouts, cycled with `v` in nav mode.
@@ -110,6 +114,72 @@ pub enum FlagRowFocus {
     Flag(usize),
 }
 
+/// Filter applied to the history panel session list.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum HistoryFilter {
+    #[default]
+    All,
+    Named,
+    ThisLanguage,
+}
+
+impl HistoryFilter {
+    /// Cycle to the next filter.
+    pub fn next(&self) -> Self {
+        match self {
+            Self::All => Self::Named,
+            Self::Named => Self::ThisLanguage,
+            Self::ThisLanguage => Self::All,
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Named => "Named",
+            Self::ThisLanguage => "This language",
+        }
+    }
+}
+
+/// State of the inline rename input in the history panel.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum HistoryAction {
+    /// Normal browsing.
+    #[default]
+    None,
+    /// User is typing a new name for the selected session.
+    Renaming(String),
+    /// Waiting for delete confirmation.
+    ConfirmDelete,
+}
+
+/// All mutable state for the history panel.
+#[derive(Debug, Default)]
+pub struct HistoryPanelState {
+    pub filter: HistoryFilter,
+    /// Cached session list (refreshed on open and after mutations).
+    pub sessions: Vec<SessionSummary>,
+    /// Index of the highlighted session in the filtered list.
+    pub selected: usize,
+    /// Scroll offset for the session list.
+    pub scroll: usize,
+    pub action: HistoryAction,
+}
+
+impl HistoryPanelState {
+    /// Clamp selected and scroll to the current list length.
+    pub fn clamp(&mut self) {
+        let len = self.sessions.len();
+        if len == 0 {
+            self.selected = 0;
+            self.scroll = 0;
+        } else {
+            self.selected = self.selected.min(len - 1);
+        }
+    }
+}
+
 pub struct App<'a> {
     pub mode: AppMode,
     pub focus: Focus,
@@ -148,6 +218,10 @@ pub struct App<'a> {
     /// Session manager: handles undo/redo and state persistence.
     /// `None` only during construction before the manager is attached.
     pub session_manager: Option<SessionManager>,
+
+    /// Whether the history panel is visible.
+    pub show_history: bool,
+    pub history: HistoryPanelState,
 
     /// Whether to show the keybind help overlay.
     pub show_help: bool,
@@ -212,6 +286,8 @@ impl<'a> App<'a> {
             results_sub_focus: ResultsSubFocus::Matches,
             nerd_fonts,
             session_manager: None,
+            show_history: false,
+            history: HistoryPanelState::default(),
             show_help: false,
         }
     }
@@ -256,6 +332,47 @@ impl<'a> App<'a> {
         self.matches_scroll = 0;
         self.preview_scroll = 0;
         self.persist_state();
+    }
+
+    /// Open the history panel, refreshing the session list.
+    pub fn open_history(&mut self) {
+        self.show_history = true;
+        self.focus = Focus::History;
+        self.refresh_history();
+    }
+
+    /// Close the history panel and return focus to the pattern field.
+    pub fn close_history(&mut self) {
+        self.show_history = false;
+        self.history.action = HistoryAction::None;
+        self.focus = Focus::Pattern;
+        self.mode = AppMode::Insert;
+        self.update_borders();
+    }
+
+    /// Reload the session list from the DB using the current filter.
+    pub fn refresh_history(&mut self) {
+        if let Some(mgr) = &self.session_manager {
+            let filter = self.history_list_filter();
+            match mgr.list_sessions(&filter) {
+                Ok(sessions) => {
+                    self.history.sessions = sessions;
+                    self.history.clamp();
+                }
+                Err(e) => eprintln!("warning: failed to load sessions: {}", e),
+            }
+        }
+    }
+
+    /// Convert the UI `HistoryFilter` to a DB `ListFilter`.
+    fn history_list_filter(&self) -> ListFilter {
+        match &self.history.filter {
+            HistoryFilter::All => ListFilter::All,
+            HistoryFilter::Named => ListFilter::Named,
+            HistoryFilter::ThisLanguage => {
+                ListFilter::Language("rust".to_string())
+            } // TODO: use actual current language once multi-engine is implemented
+        }
     }
 
     /// Attach a `SessionManager` and optionally load its current state.
@@ -402,6 +519,7 @@ impl<'a> App<'a> {
             Focus::Input => Focus::Flags,
             Focus::Flags => Focus::Results,
             Focus::Results => Focus::Pattern,
+            Focus::History => Focus::History, // history panel handles its own Tab
         };
         self.update_borders();
     }
@@ -421,6 +539,7 @@ impl<'a> App<'a> {
             }
             Focus::Flags => Focus::Input,
             Focus::Results => Focus::Flags,
+            Focus::History => Focus::History, // history panel handles its own Tab
         };
         self.update_borders();
     }
@@ -615,6 +734,7 @@ fn handle_insert(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
                 }
             }
             Focus::Results => {} // Results pane is never in insert mode
+            Focus::History => {} // History panel is always in Nav mode
         },
     }
     false
@@ -633,6 +753,102 @@ fn handle_nav(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
         // Help overlay
         (Char('?'), KM::NONE) => app.show_help = !app.show_help,
         (Esc, KM::NONE) if app.show_help => app.show_help = false,
+
+        // History panel
+        (Char('h'), KM::NONE) if !app.show_history => app.open_history(),
+        // Only close if not mid-action (otherwise h should be typed into the
+        // rename buffer)
+        (Char('h'), KM::NONE)
+            if app.show_history
+                && app.history.action == HistoryAction::None =>
+        {
+            app.close_history();
+        }
+
+        // History panel navigation (when history has focus)
+        (Up, KM::NONE)
+            if app.focus == Focus::History
+                && app.history.action == HistoryAction::None
+                && app.history.selected > 0 =>
+        {
+            app.history.selected -= 1;
+            if app.history.selected < app.history.scroll {
+                app.history.scroll = app.history.selected;
+            }
+        }
+        (Down, KM::NONE)
+            if app.focus == Focus::History
+                && app.history.action == HistoryAction::None =>
+        {
+            let max = app.history.sessions.len().saturating_sub(1);
+            if app.history.selected < max {
+                app.history.selected += 1;
+            }
+        }
+        (Tab, KM::NONE)
+            if app.focus == Focus::History
+                && app.history.action == HistoryAction::None =>
+        {
+            app.history.filter = app.history.filter.next();
+            app.refresh_history();
+        }
+        (Enter, KM::NONE) if app.focus == Focus::History => {
+            handle_history_enter(app);
+        }
+        (Char('n'), KM::NONE)
+            if app.focus == Focus::History
+                && app.history.action == HistoryAction::None =>
+        {
+            if let Some(s) = app.history.sessions.get(app.history.selected) {
+                let current_name = s.name.clone().unwrap_or_default();
+                app.history.action = HistoryAction::Renaming(current_name);
+            }
+        }
+        (Char('d'), KM::NONE)
+            if app.focus == Focus::History
+                && app.history.action == HistoryAction::None =>
+        {
+            app.history.action = HistoryAction::ConfirmDelete;
+        }
+        (Char('y'), KM::NONE)
+            if app.focus == Focus::History
+                && app.history.action == HistoryAction::None =>
+        {
+            // TODO: open copy menu for selected entry (phase: copy/export)
+        }
+        // Rename input handling
+        (Char(c), KM::NONE)
+            if matches!(app.history.action, HistoryAction::Renaming(_)) =>
+        {
+            if let HistoryAction::Renaming(ref mut buf) = app.history.action {
+                buf.push(c);
+            }
+        }
+        (Backspace, KM::NONE)
+            if matches!(app.history.action, HistoryAction::Renaming(_)) =>
+        {
+            if let HistoryAction::Renaming(ref mut buf) = app.history.action {
+                buf.pop();
+            }
+        }
+        // Delete confirmation
+        (Char('y'), KM::NONE)
+            if app.history.action == HistoryAction::ConfirmDelete =>
+        {
+            handle_history_delete(app);
+        }
+        (Char('n'), KM::NONE)
+            if app.history.action == HistoryAction::ConfirmDelete =>
+        {
+            app.history.action = HistoryAction::None;
+        }
+        (Esc, KM::NONE) if app.focus == Focus::History => {
+            if app.history.action != HistoryAction::None {
+                app.history.action = HistoryAction::None;
+            } else {
+                app.close_history();
+            }
+        }
 
         // Undo / redo (session-level, via SQLite)
         (Char('z'), KM::CONTROL) => {
@@ -747,9 +963,73 @@ fn handle_nav(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
     false
 }
 
+/// Handle Enter in the history panel:
+/// - In normal mode: switch to the selected session
+/// - In rename mode: commit the new name
+fn handle_history_enter(app: &mut App) {
+    match app.history.action.clone() {
+        HistoryAction::None => {
+            // Switch to selected session
+            if let Some(summary) =
+                app.history.sessions.get(app.history.selected).cloned()
+                && let Some(mgr) = &mut app.session_manager
+            {
+                match mgr.switch_to(summary.id) {
+                    Ok(state_opt) => {
+                        // Load state if the session has one; otherwise keep
+                        // current content (new/empty session).
+                        if let Some(state) = state_opt {
+                            app.load_state(&state);
+                        }
+                        app.close_history();
+                    }
+                    Err(e) => eprintln!("failed to switch session: {}", e),
+                }
+            }
+        }
+        HistoryAction::Renaming(name) => {
+            let name_opt = if name.trim().is_empty() {
+                None
+            } else {
+                Some(name.as_str())
+            };
+            if let Some(summary) =
+                app.history.sessions.get(app.history.selected).cloned()
+                && let Some(mgr) = &app.session_manager
+                && let Err(e) = mgr.rename_session(summary.id, name_opt)
+            {
+                eprintln!("failed to rename session: {}", e);
+            }
+            app.history.action = HistoryAction::None;
+            app.refresh_history();
+        }
+        HistoryAction::ConfirmDelete => {}
+    }
+}
+
+/// Handle confirmed delete in the history panel.
+fn handle_history_delete(app: &mut App) {
+    if let Some(summary) =
+        app.history.sessions.get(app.history.selected).cloned()
+        && let Some(mgr) = &app.session_manager
+    {
+        match mgr.delete_session(summary.id) {
+            Ok(_) => {
+                app.history.action = HistoryAction::None;
+                app.refresh_history();
+                app.history.clamp();
+            }
+            Err(e) => {
+                eprintln!("failed to delete session: {}", e);
+                app.history.action = HistoryAction::None;
+            }
+        }
+    }
+}
+
 /// Render the full application UI into `frame`.
-/// Dispatches to per-pane render functions. Shows a size warning if the
-/// terminal is too small to render the layout meaningfully.
+/// When the history panel is open, splits horizontally into main content
+/// and the history panel. Shows a size warning if the terminal is too small.
 pub fn render(app: &App, frame: &mut Frame) {
     let area = frame.area();
 
@@ -762,6 +1042,38 @@ pub fn render(app: &App, frame: &mut Frame) {
         return;
     }
 
+    if app.show_history {
+        // History panel takes 40 columns on the right; main content gets the rest.
+        // If the terminal is too narrow for a split, history takes the full width.
+        let history_width = 42u16;
+        if area.width > history_width + 40 {
+            let split = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Min(40),
+                    Constraint::Length(history_width),
+                ])
+                .split(area);
+            render_main(app, frame, split[0]);
+            render_history_panel(app, frame, split[1]);
+        } else {
+            render_history_panel(app, frame, area);
+        }
+        if app.show_help {
+            render_help_overlay(frame, area);
+        }
+        return;
+    }
+
+    render_main(app, frame, area);
+
+    if app.show_help {
+        render_help_overlay(frame, area);
+    }
+}
+
+/// Render the main content area (all panes except the history panel).
+fn render_main(app: &App, frame: &mut Frame, area: Rect) {
     // Vertical layout:
     // [engine bar 1] [pattern 3] [replacement 3?] [input flex] [flags 1] [results flex] [status 1] [hint 1]
     // Replacement row only appears in replace mode, between pattern and input.
@@ -807,10 +1119,6 @@ pub fn render(app: &App, frame: &mut Frame) {
     render_results(app, frame, chunks[5]);
     render_status(app, frame, chunks[6]);
     render_hint(app, frame, chunks[7]);
-
-    if app.show_help {
-        render_help_overlay(frame, area);
-    }
 }
 
 /// Render the engine tab bar at the top of the layout.
@@ -1322,6 +1630,162 @@ fn render_match_list(
     );
 }
 
+/// Render the history panel (session list with filter bar and actions).
+fn render_history_panel(app: &App, frame: &mut Frame, area: Rect) {
+    use ratatui::widgets::Clear;
+    let focused = app.focus == Focus::History;
+    let border_style = if focused {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let block = Block::default()
+        .title(" History ")
+        .borders(Borders::ALL)
+        .border_style(border_style);
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+
+    // Layout: filter bar (1) + list (flex) + action hint (1)
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // filter bar
+            Constraint::Min(3),    // session list
+            Constraint::Length(1), // hint / action prompt
+        ])
+        .split(inner);
+
+    let filters = [
+        HistoryFilter::All,
+        HistoryFilter::Named,
+        HistoryFilter::ThisLanguage,
+    ];
+    let filter_spans: Vec<Span> = filters
+        .iter()
+        .flat_map(|f| {
+            let active = *f == app.history.filter;
+            let style = if active {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            let label = if active {
+                format!("[{}]", f.label())
+            } else {
+                format!(" {} ", f.label())
+            };
+            vec![Span::styled(label, style), Span::raw(" ")]
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(Line::from(filter_spans)), chunks[0]);
+
+    let list_area = chunks[1];
+    let visible_height = list_area.height as usize;
+
+    // Compute scroll such that selected stays visible
+    let scroll = {
+        let mut s = app.history.scroll;
+        if app.history.selected < s {
+            s = app.history.selected;
+        }
+        if app.history.selected >= s + visible_height {
+            s = app.history.selected + 1 - visible_height;
+        }
+        s
+    };
+
+    let active_id = app
+        .session_manager
+        .as_ref()
+        .map(|m| m.session_id())
+        .unwrap_or(-1);
+    let dim = Style::default().fg(Color::DarkGray);
+    let name_style = Style::default().fg(Color::White);
+    let active_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+    let sel_bg = Style::default().bg(Color::DarkGray);
+
+    let mut items: Vec<ListItem> = app
+        .history
+        .sessions
+        .iter()
+        .enumerate()
+        .skip(scroll)
+        .take(visible_height)
+        .map(|(i, s)| {
+            let is_selected = i == app.history.selected;
+            let is_active = s.id == active_id;
+
+            // Language prefix: nerd font icon or [lang]
+            let prefix = if app.nerd_fonts {
+                format!("{} ", engine_icon(&s.language))
+            } else {
+                format!("[{}] ", s.language)
+            };
+
+            // Session name or "(unnamed)"
+            let name = s.name.as_deref().unwrap_or("(unnamed)");
+
+            // Pattern preview (truncated)
+            let preview = s.pattern.as_deref().unwrap_or("").to_string();
+            let preview =
+                truncate(&preview, (area.width as usize).saturating_sub(6));
+
+            // Time ago
+            let ago = time_ago(&s.updated_at);
+
+            let name_s = if is_active { active_style } else { name_style };
+            let row_style = if is_selected {
+                sel_bg
+            } else {
+                Style::default()
+            };
+
+            let line = Line::from(vec![
+                Span::styled(prefix, Style::default().fg(Color::Cyan)),
+                Span::styled(name.to_string(), name_s),
+                Span::raw(" "),
+                Span::styled(ago, dim),
+            ]);
+            let preview_line =
+                Line::from(vec![Span::raw("  "), Span::styled(preview, dim)]);
+
+            ListItem::new(vec![line, preview_line]).style(row_style)
+        })
+        .collect();
+
+    if items.is_empty() {
+        items.push(ListItem::new(Span::styled("no sessions", dim)));
+    }
+
+    frame.render_widget(List::new(items), list_area);
+
+    let hint_line = match &app.history.action {
+        HistoryAction::None => Line::from(Span::styled(
+            " Enter:open  n:rename  d:del  Tab:filter  Esc:close",
+            dim,
+        )),
+        HistoryAction::Renaming(buf) => {
+            Line::from(vec![
+                Span::styled(" Name: ", Style::default().fg(Color::Yellow)),
+                Span::styled(buf.clone(), Style::default().fg(Color::White)),
+                Span::styled("█", Style::default().fg(Color::Yellow)), // cursor
+            ])
+        }
+        HistoryAction::ConfirmDelete => Line::from(Span::styled(
+            " Delete session? [y]es / [n]o",
+            Style::default().fg(Color::Red),
+        )),
+    };
+    frame.render_widget(Paragraph::new(hint_line), chunks[2]);
+}
+
 /// Render the status line showing the rendered engine invocation on the
 /// left and the match count on the right.
 fn render_status(app: &App, frame: &mut Frame, area: Rect) {
@@ -1377,7 +1841,7 @@ fn render_hint(app: &App, frame: &mut Frame, area: Rect) {
     };
 
     let hints = Span::styled(
-        "  Esc: nav  │  ctrl+p: pattern  │  ctrl+t: input  │  ctrl+g: replace  │  Tab: cycle  │  m: mode  │  v: view  │  ?: help  │  q: quit",
+        "  Esc: nav  │  ctrl+p/t: jump  │  Tab: cycle  │  h: history  │  m: mode  │  v: view  │  ?: help  │  q: quit",
         Style::default().fg(Color::DarkGray),
     );
 
@@ -1424,6 +1888,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         Line::raw("   f           Toggle fancy-regex mode"),
         Line::raw("   m           Toggle replace mode"),
         Line::raw("   v           Cycle results view"),
+        Line::raw("   h           Toggle history panel"),
         Line::raw("   Enter       Re-enter insert mode"),
         Line::raw(""),
         Line::from(Span::styled(

@@ -96,6 +96,33 @@ impl Default for SessionState {
     }
 }
 
+/// A summary row for displaying sessions in the history panel.
+/// Joins the session row with the pattern at the current undo cursor.
+#[derive(Debug, Clone)]
+pub struct SessionSummary {
+    pub id: i64,
+    pub name: Option<String>,
+    pub language: String,
+    pub flavor: Option<String>,
+    pub updated_at: String,
+    pub use_count: i64,
+    pub undo_cursor: i64,
+    /// Pattern at the current undo cursor position, if any states exist.
+    pub pattern: Option<String>,
+}
+
+/// Filter for `Db::list_sessions`.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum ListFilter {
+    /// All sessions, most recently updated first.
+    #[default]
+    All,
+    /// Only named sessions.
+    Named,
+    /// Sessions for a specific language.
+    Language(String),
+}
+
 /// Handle to the SQLite database. All mutations go through this type.
 pub struct Db {
     conn: Connection,
@@ -270,6 +297,82 @@ impl Db {
         ).context("failed to query max seq")?;
         Ok(seq)
     }
+
+    /// List sessions for the history panel, joining with the pattern at the
+    /// current undo cursor. Results are ordered most-recently-updated first.
+    pub fn list_sessions(
+        &self,
+        filter: &ListFilter,
+    ) -> Result<Vec<SessionSummary>> {
+        let base = "
+            SELECT s.id, s.name, s.language, s.flavor, s.updated_at,
+                   s.use_count, s.undo_cursor, ss.pattern
+            FROM sessions s
+            LEFT JOIN session_states ss
+                ON ss.session_id = s.id AND ss.seq = s.undo_cursor
+        ";
+
+        let order = " ORDER BY s.updated_at DESC";
+
+        let rows_to_summary =
+            |row: &rusqlite::Row| -> rusqlite::Result<SessionSummary> {
+                Ok(SessionSummary {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    language: row.get(2)?,
+                    flavor: row.get(3)?,
+                    updated_at: row.get(4)?,
+                    use_count: row.get(5)?,
+                    undo_cursor: row.get(6)?,
+                    pattern: row.get(7)?,
+                })
+            };
+
+        let results = match filter {
+            ListFilter::All => {
+                let sql = format!("{}{}", base, order);
+                let mut stmt = self.conn.prepare(&sql)?;
+                stmt.query_map([], rows_to_summary)?
+                    .collect::<rusqlite::Result<Vec<_>>>()?
+            }
+            ListFilter::Named => {
+                let sql = format!("{} WHERE s.name IS NOT NULL{}", base, order);
+                let mut stmt = self.conn.prepare(&sql)?;
+                stmt.query_map([], rows_to_summary)?
+                    .collect::<rusqlite::Result<Vec<_>>>()?
+            }
+            ListFilter::Language(lang) => {
+                let sql = format!("{} WHERE s.language = ?1{}", base, order);
+                let mut stmt = self.conn.prepare(&sql)?;
+                stmt.query_map(rusqlite::params![lang], rows_to_summary)?
+                    .collect::<rusqlite::Result<Vec<_>>>()?
+            }
+        };
+
+        Ok(results)
+    }
+
+    /// Rename a session. Pass `None` to clear the name (make it unnamed).
+    pub fn rename_session(&self, id: i64, name: Option<&str>) -> Result<()> {
+        self.conn
+            .execute(
+                "UPDATE sessions SET name = ?1, updated_at = ?2 WHERE id = ?3",
+                rusqlite::params![name, now_iso8601(), id],
+            )
+            .context("failed to rename session")?;
+        Ok(())
+    }
+
+    /// Delete a session and all its states (CASCADE handles the states).
+    pub fn delete_session(&self, id: i64) -> Result<()> {
+        self.conn
+            .execute(
+                "DELETE FROM sessions WHERE id = ?1",
+                rusqlite::params![id],
+            )
+            .context("failed to delete session")?;
+        Ok(())
+    }
 }
 
 /// Returns the XDG data directory path for the database.
@@ -349,6 +452,90 @@ fn secs_to_datetime(mut secs: u64) -> (u64, u64, u64, u64, u64, u64) {
         month += 1;
     }
     (year, month, days + 1, h, mi, s)
+}
+
+/// Returns a human-readable relative time string for an ISO 8601 timestamp.
+///
+/// Examples: "just now", "5m ago", "3h ago", "2d ago", "4w ago".
+pub fn time_ago(iso: &str) -> String {
+    let then = match parse_iso8601_secs(iso) {
+        Some(s) => s,
+        None => return iso.to_string(),
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let diff = now.saturating_sub(then);
+    match diff {
+        0..=59 => "just now".to_string(),
+        60..=3599 => format!("{}m ago", diff / 60),
+        3600..=86399 => format!("{}h ago", diff / 3600),
+        86400..=604799 => format!("{}d ago", diff / 86400),
+        _ => format!("{}w ago", diff / 604800),
+    }
+}
+
+/// Parse our ISO 8601 timestamp (`YYYY-MM-DDTHH:MM:SS.mmmZ`) to Unix seconds.
+fn parse_iso8601_secs(s: &str) -> Option<u64> {
+    if s.len() < 19 {
+        return None;
+    }
+    let year: u64 = s[0..4].parse().ok()?;
+    let month: u64 = s[5..7].parse().ok()?;
+    let day: u64 = s[8..10].parse().ok()?;
+    let hour: u64 = s[11..13].parse().ok()?;
+    let min: u64 = s[14..16].parse().ok()?;
+    let sec: u64 = s[17..19].parse().ok()?;
+    Some(datetime_to_secs(year, month, day, hour, min, sec))
+}
+
+/// Convert a UTC calendar date to a Unix timestamp.
+fn datetime_to_secs(
+    year: u64,
+    month: u64,
+    day: u64,
+    h: u64,
+    mi: u64,
+    s: u64,
+) -> u64 {
+    let mut days: u64 = 0;
+    for y in 1970..year {
+        days += if is_leap(y) { 366 } else { 365 };
+    }
+    let months = [
+        31u64,
+        if is_leap(year) { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    for dm in months.iter().take(month.saturating_sub(1) as usize) {
+        days += dm;
+    }
+    days += day.saturating_sub(1);
+    days * 86400 + h * 3600 + mi * 60 + s
+}
+
+/// Returns the Nerd Font codepoint string for a language, or a generic icon.
+/// When nerd fonts are disabled the TUI shows `[language]` instead.
+pub fn engine_icon(language: &str) -> &'static str {
+    match language {
+        "rust" => "\u{e7a8}",
+        "python" => "\u{e73c}",
+        "javascript" => "\u{e74e}",
+        "ruby" => "\u{e739}",
+        "php" => "\u{e73d}",
+        "go" => "\u{e724}",
+        _ => "\u{e615}",
+    }
 }
 
 fn is_leap(year: u64) -> bool {
@@ -464,6 +651,31 @@ mod tests {
             assert_eq!(recent.id, id2);
         }
         cleanup_temp_db(&path);
+    }
+
+    #[test]
+    fn time_ago_just_now() {
+        let now = now_iso8601();
+        assert_eq!(time_ago(&now), "just now");
+    }
+
+    #[test]
+    fn time_ago_invalid_falls_back_to_raw() {
+        assert_eq!(time_ago("not-a-date"), "not-a-date");
+    }
+
+    #[test]
+    fn engine_icon_known_languages() {
+        // Known languages return non-empty strings
+        assert!(!engine_icon("rust").is_empty());
+        assert!(!engine_icon("python").is_empty());
+        assert!(!engine_icon("javascript").is_empty());
+    }
+
+    #[test]
+    fn engine_icon_unknown_returns_fallback() {
+        // Unknown languages return the generic fallback, not empty
+        assert!(!engine_icon("cobol").is_empty());
     }
 
     #[test]
