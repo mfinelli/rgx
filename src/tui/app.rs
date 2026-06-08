@@ -219,6 +219,10 @@ pub struct App<'a> {
     /// `None` only during construction before the manager is attached.
     pub session_manager: Option<SessionManager>,
 
+    /// When true the next evaluation will not persist state to the DB.
+    /// Set by load_state() so undo/redo doesn't overwrite forward history.
+    skip_persist: bool,
+
     /// Whether the history panel is visible.
     pub show_history: bool,
     pub history: HistoryPanelState,
@@ -286,6 +290,7 @@ impl<'a> App<'a> {
             results_sub_focus: ResultsSubFocus::Matches,
             nerd_fonts,
             session_manager: None,
+            skip_persist: false,
             show_history: false,
             history: HistoryPanelState::default(),
             show_help: false,
@@ -304,6 +309,11 @@ impl<'a> App<'a> {
         {
             self.evaluate(engine);
             self.last_edit = None;
+            if self.skip_persist {
+                self.skip_persist = false;
+            } else {
+                self.persist_state();
+            }
         }
     }
 
@@ -331,7 +341,6 @@ impl<'a> App<'a> {
         // Reset scroll when results change.
         self.matches_scroll = 0;
         self.preview_scroll = 0;
-        self.persist_state();
     }
 
     /// Open the history panel, refreshing the session list.
@@ -406,6 +415,9 @@ impl<'a> App<'a> {
         self.matches_scroll = 0;
         self.preview_scroll = 0;
         self.update_borders();
+        // Prevent the re-evaluation triggered by mark_dirty from writing a
+        // new state (that would truncate forward history and break redo).
+        self.skip_persist = true;
         self.mark_dirty();
     }
 

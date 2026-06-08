@@ -167,3 +167,140 @@ impl SessionManager {
         self.current_state()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::store::Db;
+    use std::path::PathBuf;
+
+    fn temp_db() -> (Db, PathBuf) {
+        let path = std::env::temp_dir().join(format!(
+            "rgx_session_test_{}.db",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let db = Db::open(&path).unwrap();
+        (db, path)
+    }
+
+    fn cleanup(path: &PathBuf) {
+        std::fs::remove_file(path).ok();
+        std::fs::remove_file(path.with_extension("db-wal")).ok();
+        std::fs::remove_file(path.with_extension("db-shm")).ok();
+    }
+
+    fn state(pattern: &str) -> SessionState {
+        SessionState {
+            pattern: Some(pattern.to_string()),
+            mode: "match".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn undo_moves_cursor_back() {
+        let (db, path) = temp_db();
+        {
+            let mut mgr =
+                SessionManager::new_session(db, "rust", None).unwrap();
+            mgr.push(&state("a")).unwrap(); // seq 1
+            mgr.push(&state("b")).unwrap(); // seq 2
+            mgr.push(&state("c")).unwrap(); // seq 3
+
+            let s = mgr.undo().unwrap().unwrap();
+            assert_eq!(s.pattern.as_deref(), Some("b")); // back to seq 2
+            assert_eq!(mgr.cursor(), 2);
+        }
+        cleanup(&path);
+    }
+
+    #[test]
+    fn redo_after_undo_restores_forward_state() {
+        let (db, path) = temp_db();
+        {
+            let mut mgr =
+                SessionManager::new_session(db, "rust", None).unwrap();
+            mgr.push(&state("a")).unwrap(); // seq 1
+            mgr.push(&state("b")).unwrap(); // seq 2
+            mgr.push(&state("c")).unwrap(); // seq 3
+
+            mgr.undo().unwrap(); // -> seq 2
+            let s = mgr.redo().unwrap().unwrap();
+            assert_eq!(s.pattern.as_deref(), Some("c")); // back to seq 3
+            assert_eq!(mgr.cursor(), 3);
+        }
+        cleanup(&path);
+    }
+
+    #[test]
+    fn multiple_undo_steps() {
+        let (db, path) = temp_db();
+        {
+            let mut mgr =
+                SessionManager::new_session(db, "rust", None).unwrap();
+            mgr.push(&state("a")).unwrap(); // seq 1
+            mgr.push(&state("b")).unwrap(); // seq 2
+            mgr.push(&state("c")).unwrap(); // seq 3
+
+            mgr.undo().unwrap(); // -> seq 2
+            let s = mgr.undo().unwrap().unwrap();
+            assert_eq!(s.pattern.as_deref(), Some("a")); // -> seq 1
+            assert_eq!(mgr.cursor(), 1);
+        }
+        cleanup(&path);
+    }
+
+    #[test]
+    fn undo_at_beginning_returns_none() {
+        let (db, path) = temp_db();
+        {
+            let mut mgr =
+                SessionManager::new_session(db, "rust", None).unwrap();
+            mgr.push(&state("a")).unwrap(); // seq 1
+
+            mgr.undo().unwrap(); // -> below seq 1: returns None (at cursor=1, can't go lower)
+            let result = mgr.undo().unwrap();
+            assert!(result.is_none());
+        }
+        cleanup(&path);
+    }
+
+    #[test]
+    fn redo_at_head_returns_none() {
+        let (db, path) = temp_db();
+        {
+            let mut mgr =
+                SessionManager::new_session(db, "rust", None).unwrap();
+            mgr.push(&state("a")).unwrap(); // seq 1
+
+            let result = mgr.redo().unwrap();
+            assert!(result.is_none());
+        }
+        cleanup(&path);
+    }
+
+    #[test]
+    fn push_after_undo_truncates_forward_history() {
+        let (db, path) = temp_db();
+        {
+            let mut mgr =
+                SessionManager::new_session(db, "rust", None).unwrap();
+            mgr.push(&state("a")).unwrap(); // seq 1
+            mgr.push(&state("b")).unwrap(); // seq 2
+            mgr.push(&state("c")).unwrap(); // seq 3
+
+            mgr.undo().unwrap(); // -> seq 2
+            // Pushing new state while not at head truncates seq 3
+            mgr.push(&state("d")).unwrap(); // new seq 3
+
+            // Redo is no longer possible (we're at the head)
+            assert!(!mgr.can_redo().unwrap());
+            let s = mgr.current_state().unwrap().unwrap();
+            assert_eq!(s.pattern.as_deref(), Some("d"));
+        }
+        cleanup(&path);
+    }
+}
